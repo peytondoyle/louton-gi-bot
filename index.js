@@ -1,4 +1,11 @@
 require('dotenv').config();
+
+// Auto-setup credentials on Replit
+if (process.env.REPL_ID && !require('fs').existsSync('credentials.json')) {
+    console.log('🔧 Setting up credentials from environment variables...');
+    require('./setup-credentials');
+}
+
 const { Client, GatewayIntentBits, EmbedBuilder } = require('discord.js');
 const cron = require('node-cron');
 const moment = require('moment-timezone');
