@@ -49,4 +49,7 @@ temp/
 credentials.json
 token.json
 google-credentials.json
-service-account-key.jsonREPLIT_SECRETS.md
+service-account-key.json
+
+# Replit secrets documentation
+REPLIT_SECRETS.md

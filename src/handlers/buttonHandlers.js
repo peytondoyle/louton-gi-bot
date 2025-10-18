@@ -98,7 +98,7 @@ async function handleSeverity(interaction, googleSheets) {
     const user = interaction.user;
 
     const pending = pendingClarifications.get(userId);
-    if (!pending || pending.type !== 'severity') {
+    if (!pending) {
         await interaction.reply({
             content: `${EMOJI.error} Session expired. Please start over.`,
             ephemeral: true
@@ -109,6 +109,81 @@ async function handleSeverity(interaction, googleSheets) {
     // Extract severity number from button ID
     const severityNum = parseInt(interaction.customId.split('_')[1]);
     const severityLabel = severityNum <= 3 ? 'mild' : (severityNum <= 6 ? 'moderate' : 'severe');
+
+    // Check if this is an NLU clarification
+    if (pending.type === 'nlu_clarification') {
+        // Import NLU handler functions
+        const indexModule = require('../../index');
+
+        // Fill in the missing slot
+        pending.parseResult.slots.severity = severityNum;
+        pending.parseResult.missing = pending.parseResult.missing.filter(m => m !== 'severity');
+
+        // Clear pending
+        pendingClarifications.delete(userId);
+
+        // If all slots filled, log via NLU system
+        if (pending.parseResult.missing.length === 0) {
+            // We need to call logFromNLU from index.js - for now, manually log
+            const { extractMetadata } = require('../nlu/rules');
+            const metadata = extractMetadata(pending.originalMessage);
+
+            const notes = [];
+            if (pending.parseResult.slots.severity_note) notes.push(pending.parseResult.slots.severity_note);
+            notes.push(`adjSeverity=${severityNum}`);
+
+            const result = await googleSheets.appendRow({
+                user: user.tag,
+                type: pending.parseResult.intent,
+                value: pending.parseResult.intent === 'reflux' ? 'reflux' : (pending.parseResult.slots.symptom_type || 'symptom'),
+                severity: severityLabel,
+                notes: googleSheets.appendNotes ? googleSheets.appendNotes(notes) : notes.join('; '),
+                source: 'discord-dm-nlu'
+            });
+
+            if (!result.success) {
+                await interaction.update({
+                    content: `${EMOJI.error} ${result.error.userMessage}`,
+                    components: [],
+                    embeds: []
+                });
+                return;
+            }
+
+            // Add to context memory
+            contextMemory.push(userId, {
+                type: pending.parseResult.intent,
+                details: pending.parseResult.intent === 'reflux' ? 'reflux' : (pending.parseResult.slots.symptom_type || 'symptom'),
+                severity: severityLabel,
+                timestamp: Date.now()
+            });
+
+            // Success response
+            const successMsg = getRandomPhrase(PHRASES.success);
+            await interaction.update({
+                content: `${EMOJI.success} Logged **${pending.parseResult.intent}** (${severityLabel}).\n\n${successMsg}`,
+                components: [],
+                embeds: []
+            });
+        } else {
+            // Still missing slots - continue clarification flow
+            await interaction.update({
+                content: `${EMOJI.thinking} Please continue...`,
+                components: [],
+                embeds: []
+            });
+        }
+        return;
+    }
+
+    // Original severity handler for non-NLU flows
+    if (pending.type !== 'severity') {
+        await interaction.reply({
+            content: `${EMOJI.error} Session expired. Please start over.`,
+            ephemeral: true
+        });
+        return;
+    }
 
     // Clear pending
     pendingClarifications.delete(userId);

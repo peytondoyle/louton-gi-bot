@@ -6,7 +6,7 @@ if (process.env.REPL_ID && !require('fs').existsSync('credentials.json')) {
     require('./setup-credentials');
 }
 
-const { Client, GatewayIntentBits, EmbedBuilder, Partials } = require('discord.js');
+const { Client, GatewayIntentBits, EmbedBuilder, Partials, ActionRowBuilder, ButtonBuilder, ButtonStyle } = require('discord.js');
 const cron = require('node-cron');
 const moment = require('moment-timezone');
 const googleSheets = require('./services/googleSheets');
@@ -15,6 +15,18 @@ const NLPHandler = require('./utils/nlpHandler');
 const PatternAnalyzer = require('./utils/patternAnalyzer');
 const ClarificationHandler = require('./utils/clarificationHandler');
 const keepAlive = require('./keep_alive');
+
+// NLU System imports
+const { understand, formatParseResult } = require('./src/nlu/understand');
+const { extractMetadata } = require('./src/nlu/rules');
+const { getWindowStartTime } = require('./src/nlu/ontology');
+
+// UX System imports
+const { EMOJI, PHRASES, getRandomPhrase, BUTTON_IDS } = require('./src/constants/ux');
+const { buttonsSeverity, buttonsMealTime, buttonsBristol, buttonsSymptomType, trendChip } = require('./src/ui/components');
+const contextMemory = require('./src/utils/contextMemory');
+const digests = require('./src/scheduler/digests');
+const buttonHandlers = require('./src/handlers/buttonHandlers');
 
 // Start keep-alive server for Replit deployment
 keepAlive();
@@ -135,11 +147,345 @@ client.once('ready', async () => {
     console.log('🚀 Bot is fully operational and ready for commands!');
 });
 
+// Button interaction listener
+client.on('interactionCreate', async (interaction) => {
+    if (!interaction.isButton()) return;
+
+    await buttonHandlers.handleButtonInteraction(interaction, googleSheets, digests);
+});
+
 // Add debug test handler
 async function handleTest(message) {
     console.log('🧪 Test command received!');
     await message.reply('✅ Bot is working! I can receive and respond to your messages.');
 }
+
+// ========== NLU SYSTEM HELPER FUNCTIONS ==========
+
+/**
+ * Handle natural language (non-command) messages
+ */
+async function handleNaturalLanguage(message) {
+    const text = message.content.trim();
+    const userId = message.author.id;
+    const userTag = message.author.tag;
+
+    // Check for correction syntax first
+    if (text.toLowerCase().startsWith('correction:') || text.startsWith('*')) {
+        await handleCorrection(message, text);
+        return;
+    }
+
+    try {
+        // Parse intent and slots
+        const result = await understand(text, { userId }, contextMemory);
+
+        console.log(`🧠 NLU: ${formatParseResult(result)}`);
+
+        // Auto-enable digests for this user
+        digests.autoEnableForUser(userId);
+
+        // If confidence too low or "other" intent, ask for clarification
+        if (result.intent === "other" || result.confidence < 0.5) {
+            await message.reply({
+                content: `${EMOJI.thinking} I'm not quite sure what you mean. Try:\n` +
+                        `• "had oats for lunch"\n• "mild heartburn"\n• "bad poop"\n` +
+                        `Or use commands like \`!food\`, \`!symptom\`, etc.`
+            });
+            return;
+        }
+
+        // Handle based on whether we have missing slots
+        if (result.missing.length === 0) {
+            // All slots present - log immediately
+            await logFromNLU(message, result);
+        } else {
+            // Ask for missing slots via buttons
+            await requestMissingSlots(message, result);
+        }
+    } catch (error) {
+        console.error('NLU Error:', error);
+        await message.reply(`${EMOJI.error} ${getRandomPhrase(PHRASES.error)}`);
+    }
+}
+
+/**
+ * Log entry from NLU parse result
+ */
+async function logFromNLU(message, parseResult) {
+    const { intent, slots } = parseResult;
+    const userId = message.author.id;
+    const userTag = message.author.tag;
+
+    // Extract metadata
+    const metadata = extractMetadata(message.content);
+
+    // Build notes array
+    const notes = [];
+
+    // Add meal time or inferred time window
+    if (slots.meal_time) {
+        notes.push(`meal=${slots.meal_time}`);
+        if (slots.meal_time_note) {
+            notes.push(slots.meal_time_note);
+        }
+    } else if (slots.time) {
+        notes.push(`time=${new Date(slots.time).toLocaleTimeString()}`);
+    }
+
+    // Add quantity/brand
+    if (metadata.quantity) notes.push(`qty=${metadata.quantity}`);
+    if (metadata.brand) notes.push(`brand=${metadata.brand}`);
+
+    // Add severity note if auto-detected
+    if (slots.severity_note) notes.push(slots.severity_note);
+    if (slots.bristol_note) notes.push(slots.bristol_note);
+
+    // Build entry for Google Sheets
+    const entry = {
+        user: userTag,
+        type: intent,
+        value: null,
+        details: null,
+        severity: null,
+        notes: googleSheets.appendNotes(notes),
+        source: 'discord-dm-nlu'
+    };
+
+    // Fill type-specific fields
+    if (intent === 'food' || intent === 'drink') {
+        entry.value = slots.item;
+        entry.details = slots.item;
+    } else if (intent === 'symptom') {
+        entry.value = slots.symptom_type;
+        entry.details = slots.symptom_type;
+        entry.severity = slots.severity ? mapSeverityToLabel(slots.severity) : null;
+    } else if (intent === 'reflux') {
+        entry.value = 'reflux';
+        entry.details = 'reflux';
+        entry.severity = slots.severity ? mapSeverityToLabel(slots.severity) : null;
+    } else if (intent === 'bm') {
+        entry.value = slots.bristol ? `Bristol ${slots.bristol}` : 'BM';
+        entry.details = entry.value;
+        entry.bristolScale = slots.bristol;
+    }
+
+    // Add meal time to entry if present
+    if (slots.meal_time) {
+        entry.mealType = slots.meal_time;
+    }
+
+    // Log to Sheets
+    const result = await googleSheets.appendRow(entry);
+
+    if (!result.success) {
+        await message.reply(`${EMOJI.error} ${result.error.userMessage}`);
+        return;
+    }
+
+    // Add to context memory
+    contextMemory.push(userId, {
+        type: intent,
+        details: entry.value,
+        severity: entry.severity,
+        timestamp: Date.now()
+    });
+
+    // Success response
+    const successMsg = getRandomPhrase(PHRASES.success);
+    const emoji = getTypeEmoji(intent);
+    await message.reply(`${emoji} Logged **${entry.value}**.\n\n${successMsg}`);
+
+    // Check for trigger linking (if symptom/reflux)
+    if (intent === 'symptom' || intent === 'reflux') {
+        await offerTriggerLink(message, userId);
+        await checkRoughPatch(message, userId);
+        await surfaceTrendChip(message, userTag);
+    }
+
+    // Check for trigger warning (if food/drink)
+    if (intent === 'food' || intent === 'drink') {
+        await checkTriggerWarning(message, userId, entry.value);
+    }
+}
+
+/**
+ * Request missing slots from user via buttons
+ */
+async function requestMissingSlots(message, parseResult) {
+    const { intent, slots, missing } = parseResult;
+
+    // Store pending clarification in button handler
+    buttonHandlers.pendingClarifications.set(message.author.id, {
+        type: 'nlu_clarification',
+        parseResult: parseResult,
+        originalMessage: message.content,
+        timestamp: Date.now()
+    });
+
+    if (missing.includes('severity')) {
+        // Show severity buttons
+        await message.reply({
+            content: `${EMOJI.symptom} How severe is it? (1 = mild, 10 = severe)`,
+            components: buttonsSeverity()
+        });
+    } else if (missing.includes('symptom_type')) {
+        // Show symptom type buttons
+        await message.reply({
+            content: `${EMOJI.symptom} What type of symptom?`,
+            components: buttonsSymptomType()
+        });
+    } else if (missing.includes('meal_time')) {
+        // Show meal time buttons
+        await message.reply({
+            content: `${EMOJI.food} When did you have this?`,
+            components: buttonsMealTime()
+        });
+    } else if (missing.includes('bristol')) {
+        // Show Bristol scale buttons
+        await message.reply({
+            content: `${EMOJI.bm} Can you provide more details?`,
+            components: buttonsBristol()
+        });
+    } else if (missing.includes('item')) {
+        // Ask for free text item
+        await message.reply({
+            content: `${EMOJI.food} What did you have? (Type the food/drink name)`
+        });
+        // Note: Next message will be treated as the item
+    }
+}
+
+/**
+ * Offer to link symptom to recent meal
+ */
+async function offerTriggerLink(message, userId) {
+    const recentEntries = contextMemory.getRecent(userId, 10);
+
+    // Find recent food/drink within 3 hours
+    const now = Date.now();
+    const recentMeals = recentEntries.filter(e => {
+        const isFood = e.type === 'food' || e.type === 'drink';
+        const isRecent = (now - e.timestamp) <= (3 * 60 * 60 * 1000); // 3 hours
+        return isFood && isRecent;
+    });
+
+    if (recentMeals.length > 0) {
+        const meal = recentMeals[0];
+        const timeAgo = Math.round((now - meal.timestamp) / (60 * 1000)); // minutes
+
+        const linkButtons = new ActionRowBuilder()
+            .addComponents(
+                new ButtonBuilder()
+                    .setCustomId('trigger_link_yes')
+                    .setLabel(`Yes, link to ${meal.details}`)
+                    .setStyle(ButtonStyle.Primary),
+                new ButtonBuilder()
+                    .setCustomId('trigger_link_no')
+                    .setLabel('No')
+                    .setStyle(ButtonStyle.Secondary)
+            );
+
+        await message.reply({
+            content: `🔗 Link this symptom to **${meal.details}** (${timeAgo}min ago)?`,
+            components: [linkButtons]
+        });
+    }
+}
+
+/**
+ * Check if user is in a rough patch and send supportive message
+ */
+async function checkRoughPatch(message, userId) {
+    if (contextMemory.hasRoughPatch(userId)) {
+        const phrase = getRandomPhrase(PHRASES.roughPatch);
+        await message.channel.send(`${EMOJI.heart} ${phrase}`);
+    }
+}
+
+/**
+ * Surface trend chip after symptom log
+ */
+async function surfaceTrendChip(message, userTag) {
+    try {
+        const entries = await googleSheets.getWeekEntries(userTag);
+        const trends = await PatternAnalyzer.calculateTrends(entries, userTag, 7);
+
+        if (trends.trend !== 'no_data') {
+            const chip = trendChip(trends.improvement);
+            await message.channel.send(`📊 ${chip}`);
+        }
+    } catch (error) {
+        // Silently fail - trends are optional
+        console.error('Error getting trend chip:', error.message);
+    }
+}
+
+/**
+ * Handle correction messages for lexicon learning
+ */
+async function handleCorrection(message, text) {
+    const userId = message.author.id;
+    const userTag = message.author.tag;
+
+    // Extract corrected text
+    const correctedText = text.replace(/^correction:\s*/i, '').replace(/^\*+/, '').trim();
+
+    // Undo last entry
+    const undoResult = await googleSheets.undoLastEntry(userTag);
+
+    if (!undoResult.success) {
+        await message.reply(`${EMOJI.error} ${undoResult.message}`);
+        return;
+    }
+
+    // Re-parse and log
+    const result = await understand(correctedText, { userId }, contextMemory);
+
+    if (result.missing.length === 0) {
+        await logFromNLU(message, result);
+
+        // Learn the phrase
+        contextMemory.learnPhrase(userId, correctedText, result.intent, result.slots);
+
+        await message.reply(`✅ Corrected and learned! I'll remember "${correctedText}" next time.`);
+    } else {
+        await requestMissingSlots(message, result);
+    }
+}
+
+/**
+ * Check for trigger warnings
+ */
+async function checkTriggerWarning(message, userId, itemName) {
+    // Check if this item has caused symptoms before (simplified for now)
+    // This could be enhanced with actual pattern analysis
+}
+
+/**
+ * Map severity number to label
+ */
+function mapSeverityToLabel(severityNum) {
+    if (severityNum <= 3) return 'mild';
+    if (severityNum <= 6) return 'moderate';
+    return 'severe';
+}
+
+/**
+ * Get emoji for type
+ */
+function getTypeEmoji(type) {
+    const emojiMap = {
+        food: EMOJI.food,
+        drink: EMOJI.drink,
+        symptom: EMOJI.symptom,
+        reflux: EMOJI.reflux,
+        bm: EMOJI.bm
+    };
+    return emojiMap[type] || EMOJI.success;
+}
+
+// ========== END NLU SYSTEM HELPER FUNCTIONS ==========
 
 // Message handler (supports both DMs and channel messages)
 client.on('messageCreate', async (message) => {
@@ -212,44 +558,12 @@ client.on('messageCreate', async (message) => {
     }
     // Try natural language processing if not a command
     else if (!command.startsWith('!')) {
-        console.log('🧠 Attempting natural language processing...');
-
-        // First check if user has pending clarification
-        if (ClarificationHandler.hasPendingClarification(message.author.id)) {
-            console.log('📝 Processing clarification response...');
-            const clarificationResult = await ClarificationHandler.processClarificationResponse(
-                message.author.id,
-                message.content
-            );
-
-            if (clarificationResult && !clarificationResult.expired) {
-                // Process the clarified message
-                await handleClarifiedMessage(message, clarificationResult);
-                console.log('=== END MESSAGE ===\n');
-                return;
-            }
-        }
-
-        const nlpResult = NLPHandler.analyzeMessage(message.content);
-
-        if (nlpResult) {
-            console.log(`✅ NLP understood: ${nlpResult.type} (${nlpResult.confidence} confidence)`);
-
-            // Check if needs clarification
-            const needsClarification = ClarificationHandler.needsClarification(message.content, nlpResult);
-            if (needsClarification) {
-                console.log('❓ Message needs clarification');
-                await ClarificationHandler.askClarification(needsClarification.type, message.content, message);
-            } else {
-                await handleNLPResult(message, nlpResult);
-            }
-        } else {
-            console.log('❓ Could not understand message via NLP');
-            // Check if the message is vague and needs clarification
-            const needsClarification = ClarificationHandler.needsClarification(message.content, null);
-            if (needsClarification) {
-                await ClarificationHandler.askClarification(needsClarification.type, message.content, message);
-            }
+        console.log('🧠 Using NLU system for natural language...');
+        try {
+            await handleNaturalLanguage(message);
+        } catch (error) {
+            console.error('❌ Error in NLU handler:', error);
+            await message.reply('❌ An error occurred while processing your message. Please try again or use a command.');
         }
     }
     else {
