@@ -4,32 +4,32 @@ const moment = require('moment-timezone');
 // Keywords and patterns for different types of entries
 const PATTERNS = {
     drinks: {
-        keywords: ['had', 'drank', 'drinking', 'sipped', 'chugged', 'finished'],
+        keywords: ['had', 'drank', 'drinking', 'sipped', 'chugged', 'finished', 'had some', 'having'],
         items: {
             chai: ['chai', 'chai latte', 'dirty chai', 'iced chai'],
             coffee: ['coffee', 'espresso', 'latte', 'cappuccino', 'americano'],
             refresher: ['refresher', 'starbucks refresher', 'pink drink'],
             water: ['water', 'h2o', 'aqua'],
-            tea: ['tea', 'green tea', 'herbal tea', 'chamomile', 'ginger tea'],
-            alcohol: ['beer', 'wine', 'alcohol', 'drink', 'cocktail', 'whiskey', 'vodka'],
+            tea: ['tea', 'green tea', 'herbal tea', 'chamomile', 'ginger tea', 'some tea'],
+            alcohol: ['beer', 'wine', 'alcohol', 'cocktail', 'whiskey', 'vodka'],
             soda: ['soda', 'coke', 'pepsi', 'sprite', 'pop', 'soft drink'],
             juice: ['juice', 'oj', 'orange juice', 'apple juice'],
         }
     },
 
     food: {
-        keywords: ['ate', 'eaten', 'had', 'lunch', 'dinner', 'breakfast', 'snack', 'meal'],
+        keywords: ['ate', 'eaten', 'had', 'having', 'lunch', 'dinner', 'breakfast', 'snack', 'meal', 'for breakfast', 'for lunch', 'for dinner', 'eating', 'with'],
         triggers: ['spicy', 'dairy', 'cheese', 'milk', 'gluten', 'bread', 'fried', 'citrus', 'tomato', 'pizza', 'pasta'],
-        safe: ['rice', 'chicken', 'oatmeal', 'banana', 'toast', 'eggs', 'soup']
+        safe: ['rice', 'chicken', 'oatmeal', 'oats', 'banana', 'toast', 'eggs', 'egg', 'soup']
     },
 
     symptoms: {
         reflux: ['reflux', 'heartburn', 'acid', 'burning', 'gerd'],
         stomach: ['stomach', 'tummy', 'belly', 'abdomen', 'gut'],
         pain: ['hurt', 'hurts', 'ache', 'pain', 'cramp', 'cramping'],
-        bloating: ['bloated', 'bloating', 'full', 'distended', 'swollen'],
+        bloating: ['bloated', 'bloating', 'full', 'distended', 'swollen', 'feeling bloated'],
         nausea: ['nausea', 'nauseous', 'queasy', 'sick'],
-        bm: ['bm', 'bowel', 'bathroom', 'constipated', 'diarrhea']
+        bm: ['bm', 'bowel', 'bathroom', 'constipated', 'diarrhea', 'bristol', 'normal bm', 'this morning']
     },
 
     positive: {
@@ -38,9 +38,9 @@ const PATTERNS = {
     },
 
     severity: {
-        mild: ['mild', 'slight', 'little', 'minor', 'small'],
-        moderate: ['moderate', 'medium', 'some', 'moderate'],
-        severe: ['severe', 'bad', 'terrible', 'awful', 'worst', 'horrible', 'intense']
+        mild: ['mild', 'slight', 'little', 'minor', 'small', 'a bit'],
+        moderate: ['moderate', 'medium', 'some', 'okay', 'not too bad'],
+        severe: ['severe', 'bad', 'terrible', 'awful', 'worst', 'horrible', 'intense', 'really bad', 'very bad', 'is bad', 'acting up']
     }
 };
 
@@ -279,15 +279,37 @@ class NLPHandler {
             }
         }
 
-        // Generic food with context
+        // Generic food with context - try to extract the food description
         if (hasFoodContext) {
-            const foodWords = message.split(' ').slice(1).join(' '); // Remove the first word (ate/had/etc)
+            // Find the keyword position and extract everything around it
+            let foodDescription = message;
+            for (const keyword of PATTERNS.food.keywords) {
+                if (message.includes(keyword)) {
+                    // Remove the keyword and clean up
+                    foodDescription = message.replace(keyword, '').trim();
+                    break;
+                }
+            }
+
             return {
                 type: 'food',
-                value: foodWords || message,
+                value: foodDescription || message,
                 category: CATEGORIES.NEUTRAL,
-                confidence: 'low',
-                response: `📝 Logged: ${foodWords || message}`
+                confidence: 'medium',
+                response: `📝 Logged: ${foodDescription || message}`
+            };
+        }
+
+        // If no food keywords but mentions common foods/meals without context
+        // Try to detect if it's describing food even without keywords
+        const commonFoods = ['salad', 'sandwich', 'burger', 'wrap', 'bowl', 'plate'];
+        if (this.containsAny(message, commonFoods)) {
+            return {
+                type: 'food',
+                value: message,
+                category: CATEGORIES.NEUTRAL,
+                confidence: 'medium',
+                response: `📝 Logged: ${message}`
             };
         }
 
