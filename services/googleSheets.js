@@ -632,6 +632,15 @@ class GoogleSheetsService {
         return sheet ? sheet.properties.sheetId : null;
     }
 
+    /**
+     * Helper to format Notes field with semicolon-delimited metadata
+     * @param {Array<string>} notesArray - Array of note strings
+     * @returns {string} - Joined notes
+     */
+    appendNotes(notesArray) {
+        return notesArray.filter(n => n && n.trim()).join('; ');
+    }
+
     async clearSheet() {
         if (!this.initialized) await this.initialize();
 

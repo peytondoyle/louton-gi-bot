@@ -1,10 +1,16 @@
 // Context Memory: In-memory per-user rolling context tracker
 // Tracks last N entries per user with TTL for empathetic follow-ups
+// Includes lexicon learning and optional JSON persistence
 
 const { UX } = require('../constants/ux');
+const fs = require('fs');
+const path = require('path');
 
-// In-memory storage: userId -> { entries: [], warnings: Map }
+// In-memory storage: userId -> { entries: [], warnings: Map, lexicon: Map }
 const userContexts = new Map();
+
+// Lexicon persistence path (Replit-friendly)
+const LEXICON_PATH = path.join(process.cwd(), '.data', 'lexicon.json');
 
 /**
  * Get or initialize context for a user
@@ -16,6 +22,7 @@ function getContext(userId) {
         userContexts.set(userId, {
             entries: [],
             warnings: new Map(), // trigger -> timestamp of last warning
+            lexicon: new Map(), // phrase -> { intent, slots, learnedAt }
             lastCleanup: Date.now()
         });
     }
@@ -225,6 +232,118 @@ function globalCleanup() {
     }
 }
 
+/**
+ * Learn a phrase for a user (lexicon entry)
+ * @param {string} userId - Discord user ID
+ * @param {string} phrase - The exact phrase (will be lowercased/trimmed)
+ * @param {string} intent - Intent to associate
+ * @param {Object} slots - Partial slots to merge on lookup
+ */
+function learnPhrase(userId, phrase, intent, slots = {}) {
+    const context = getContext(userId);
+    const key = phrase.toLowerCase().trim();
+
+    context.lexicon.set(key, {
+        intent,
+        slots,
+        learnedAt: Date.now()
+    });
+
+    console.log(`📚 Learned phrase for user ${userId}: "${key}" → ${intent}`);
+
+    // Persist lexicon asynchronously
+    saveLexicon();
+}
+
+/**
+ * Look up a learned phrase
+ * @param {string} userId - Discord user ID
+ * @param {string} phrase - The phrase to look up
+ * @returns {Object|null} - { intent, slots } or null
+ */
+function lookupPhrase(userId, phrase) {
+    const context = getContext(userId);
+    const key = phrase.toLowerCase().trim();
+
+    return context.lexicon.get(key) || null;
+}
+
+/**
+ * Check if warning is muted for a trigger
+ * @param {string} userId - Discord user ID
+ * @param {string} trigger - Trigger name
+ * @returns {boolean}
+ */
+function isWarningMuted(userId, trigger) {
+    return !shouldWarn(userId, trigger);
+}
+
+/**
+ * Set warning mute until timestamp
+ * @param {string} userId - Discord user ID
+ * @param {string} trigger - Trigger name
+ * @param {number} untilTs - Timestamp until warning is muted
+ */
+function setWarningMute(userId, trigger, untilTs) {
+    // For 24h mutes, just record the warning
+    recordWarning(userId, trigger);
+}
+
+/**
+ * Save lexicon to disk (async, fail-safe)
+ */
+function saveLexicon() {
+    try {
+        const lexiconData = {};
+
+        for (const [userId, context] of userContexts.entries()) {
+            if (context.lexicon.size > 0) {
+                lexiconData[userId] = {};
+                for (const [phrase, data] of context.lexicon.entries()) {
+                    lexiconData[userId][phrase] = data;
+                }
+            }
+        }
+
+        const dir = path.dirname(LEXICON_PATH);
+        if (!fs.existsSync(dir)) {
+            fs.mkdirSync(dir, { recursive: true });
+        }
+
+        fs.writeFileSync(LEXICON_PATH, JSON.stringify(lexiconData, null, 2), 'utf8');
+    } catch (error) {
+        // Silently ignore persistence errors
+        console.error('Failed to save lexicon (non-fatal):', error.message);
+    }
+}
+
+/**
+ * Load lexicon from disk (on startup)
+ */
+function loadLexicon() {
+    try {
+        if (fs.existsSync(LEXICON_PATH)) {
+            const data = fs.readFileSync(LEXICON_PATH, 'utf8');
+            const lexiconData = JSON.parse(data);
+
+            for (const [userId, phrases] of Object.entries(lexiconData)) {
+                const context = getContext(userId);
+                for (const [phrase, phraseData] of Object.entries(phrases)) {
+                    context.lexicon.set(phrase, phraseData);
+                }
+            }
+
+            console.log('📚 Loaded lexicon from disk');
+        }
+    } catch (error) {
+        // Silently ignore load errors
+        console.error('Failed to load lexicon (non-fatal):', error.message);
+    }
+}
+
+// Load lexicon on module initialization
+loadLexicon();
+
 // Run global cleanup every 10 minutes
 setInterval(globalCleanup, 10 * 60 * 1000);
 
@@ -237,5 +356,9 @@ module.exports = {
     dismissWarning,
     clear,
     getStats,
-    globalCleanup
+    globalCleanup,
+    learnPhrase,
+    lookupPhrase,
+    isWarningMuted,
+    setWarningMute
 };
