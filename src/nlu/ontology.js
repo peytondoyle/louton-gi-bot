@@ -107,6 +107,21 @@ const INTENT_KEYWORDS = {
     ]
 };
 
+// Head nouns used to anchor main food items
+const HEAD_NOUNS = [
+    'cereal', 'oatmeal', 'oats', 'granola', 'muesli', 'yogurt', 'salad', 'pizza',
+    'sandwich', 'wrap', 'bowl', 'soup', 'pasta', 'noodles', 'eggs', 'omelet',
+    'toast', 'bagel', 'smoothie', 'burger', 'taco', 'burrito', 'quesadilla'
+];
+
+// Cereal brands for brand-aware extraction
+const CEREAL_BRANDS = [
+    'Life', 'Cheerios', 'Raisin Bran', 'Frosted Flakes', 'Corn Flakes', 'Rice Krispies',
+    'Special K', 'Cinnamon Toast Crunch', 'Kashi', 'Grape-Nuts', 'Honey Bunches of Oats',
+    'Mini-Wheats', 'Trix', 'Cocoa Puffs', 'Lucky Charms', 'Cap\'n Crunch', 'Golden Grahams',
+    'Froot Loops', 'Apple Jacks', 'Wheaties', 'Chex', 'Fiber One', 'All-Bran'
+];
+
 // Blacklist for item extraction (not food/drink items)
 const ITEM_BLACKLIST = [
     "breakfast", "lunch", "dinner", "snack", "morning", "evening", "noon",
@@ -205,6 +220,8 @@ module.exports = {
     ADJECTIVE_SEVERITY,
     INTENT_KEYWORDS,
     ITEM_BLACKLIST,
+    HEAD_NOUNS,
+    CEREAL_BRANDS,
     containsSynonym,
     findSynonymGroup,
     extractSeverityFromAdjectives,

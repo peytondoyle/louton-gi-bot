@@ -233,9 +233,10 @@ async function logFromNLU(message, parseResult) {
         notes.push(`time=${new Date(slots.time).toLocaleTimeString()}`);
     }
 
-    // Add quantity/brand
+    // Add quantity/brand/sides
     if (metadata.quantity) notes.push(`qty=${metadata.quantity}`);
     if (metadata.brand) notes.push(`brand=${metadata.brand}`);
+    if (slots.sides) notes.push(`sides=${slots.sides}`);
 
     // Add severity note if auto-detected
     if (slots.severity_note) notes.push(slots.severity_note);

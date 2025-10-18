@@ -7,6 +7,8 @@ const {
     SYNONYMS,
     INTENT_KEYWORDS,
     ITEM_BLACKLIST,
+    HEAD_NOUNS,
+    CEREAL_BRANDS,
     containsSynonym,
     findSynonymGroup,
     extractSeverityFromAdjectives,
@@ -133,10 +135,13 @@ function rulesParse(text) {
         return result;
     }
 
-    // 4. ITEM EXTRACTION using compromise (for food/drink)
-    const item = extractItem(t);
-    if (item) {
-        result.slots.item = item;
+    // 4. ITEM EXTRACTION using head-noun + "with" heuristic (for food/drink)
+    const extracted = extractItem(t);
+    if (extracted.item) {
+        result.slots.item = extracted.item;
+    }
+    if (extracted.sides) {
+        result.slots.sides = extracted.sides;
     }
 
     // 5. DRINK vs FOOD Classification
@@ -196,35 +201,106 @@ function rulesParse(text) {
 }
 
 /**
- * Extract food/drink item using compromise NLP
+ * Extract food/drink item using head-noun + "with" sides heuristic
  * @param {string} text - Lowercased text
- * @returns {string|null} - Extracted item or null
+ * @returns {Object} - {item, sides} object
  */
 function extractItem(text) {
     try {
-        const doc = compromise(text);
+        // 1. Split on "with" to separate main item from sides
+        const WITH_RE = /\bwith\b/i;
+        let mainChunk = null;
+        let sideChunk = null;
 
-        // Get all noun phrases
-        const nouns = doc.nouns().out('array');
-
-        if (nouns.length === 0) return null;
-
-        // Filter out blacklisted words and find longest valid noun phrase
-        const validNouns = nouns
-            .filter(noun => {
-                const lowerNoun = noun.toLowerCase();
-                return !ITEM_BLACKLIST.some(blacklisted => lowerNoun === blacklisted);
-            })
-            .sort((a, b) => b.length - a.length); // Prefer longer phrases
-
-        if (validNouns.length > 0) {
-            return validNouns[0];
+        if (WITH_RE.test(text)) {
+            const parts = text.split(WITH_RE);
+            mainChunk = (parts[0] || '').trim();
+            sideChunk = (parts[1] || '').trim();
+        } else {
+            mainChunk = text;
         }
 
-        return null;
+        // 2. Brand-aware cereal capture (Brand + cereal) or ProperNoun + cereal
+        function captureCereal(srcFull) {
+            if (!srcFull) return null;
+
+            // Try brand regex first (e.g., "Life cereal", "Cheerios")
+            const brandRegex = new RegExp(`\\b(${CEREAL_BRANDS.join('|')})\\b(?:\\s+cereal)?`, 'i');
+            let m = srcFull.match(brandRegex);
+            if (m) {
+                // If "cereal" follows brand, include it; otherwise just brand name
+                if (srcFull.toLowerCase().includes(m[1].toLowerCase() + ' cereal')) {
+                    return `${m[1]} cereal`;
+                }
+                return m[1]; // Brand implies cereal
+            }
+
+            // Proper-noun + cereal (e.g., "Kix cereal", "Life cereal")
+            m = srcFull.match(/\b([A-Z][A-Za-z'']+)\s+cereal\b/);
+            if (m) return `${m[1]} cereal`;
+
+            // Just "cereal" alone
+            if (/\bcereal\b/i.test(srcFull)) return 'cereal';
+
+            return null;
+        }
+
+        // 3. Head-noun anchor (e.g., "oatmeal", "salad", "pizza")
+        function chooseItemFromHeadNoun(src) {
+            if (!src) return null;
+            const lower = src.toLowerCase();
+
+            // Find which head noun is present
+            const hit = HEAD_NOUNS.find(h => lower.includes(h));
+            if (!hit) return null;
+
+            // Capture up to 2 tokens before the head noun + the noun itself
+            const tokens = src.split(/\s+/);
+            const idx = tokens.findIndex(t => t.toLowerCase().includes(hit));
+            if (idx < 0) return hit;
+
+            const start = Math.max(0, idx - 2);
+            return tokens.slice(start, idx + 1).join(' ').trim();
+        }
+
+        let chosen = null;
+
+        // 4. Priority 1: If "cereal" appears, try brand capture first
+        const cerealItem = captureCereal(mainChunk || text);
+        if (cerealItem) chosen = cerealItem;
+
+        // 5. Priority 2: Use head-noun picker on mainChunk, then full text
+        if (!chosen) chosen = chooseItemFromHeadNoun(mainChunk);
+        if (!chosen) chosen = chooseItemFromHeadNoun(text);
+
+        // 6. Fallback: Use compromise noun-phrase extractor
+        if (!chosen) {
+            const doc = compromise(mainChunk || text);
+            const nouns = doc.nouns().out('array');
+
+            if (nouns.length > 0) {
+                const validNouns = nouns
+                    .filter(noun => {
+                        const lowerNoun = noun.toLowerCase();
+                        return !ITEM_BLACKLIST.some(blacklisted => lowerNoun === blacklisted);
+                    })
+                    .sort((a, b) => b.length - a.length); // Prefer longer phrases
+
+                if (validNouns.length > 0) {
+                    chosen = validNouns[0];
+                }
+            }
+        }
+
+        // 7. Return item + sides
+        return {
+            item: chosen,
+            sides: sideChunk
+        };
+
     } catch (error) {
-        console.error('Error extracting item with compromise:', error);
-        return null;
+        console.error('Error extracting item:', error);
+        return { item: null, sides: null };
     }
 }
 
