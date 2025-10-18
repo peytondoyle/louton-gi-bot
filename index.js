@@ -6,7 +6,7 @@ if (process.env.REPL_ID && !require('fs').existsSync('credentials.json')) {
     require('./setup-credentials');
 }
 
-const { Client, GatewayIntentBits, EmbedBuilder } = require('discord.js');
+const { Client, GatewayIntentBits, EmbedBuilder, Partials } = require('discord.js');
 const cron = require('node-cron');
 const moment = require('moment-timezone');
 const googleSheets = require('./services/googleSheets');
@@ -24,7 +24,13 @@ const client = new Client({
         GatewayIntentBits.MessageContent,
         GatewayIntentBits.DirectMessages,
     ],
+    partials: [Partials.Channel, Partials.Message], // Required for DMs in Discord.js v14
 });
+
+// Debug: Log client configuration
+console.log('🔧 Initializing Discord client with:');
+console.log('   Intents: Guilds, GuildMessages, MessageContent, DirectMessages');
+console.log('   Partials: Channel, Message (required for DM support)');
 
 // Configuration
 const DISCORD_TOKEN = process.env.DISCORD_TOKEN;
@@ -80,8 +86,17 @@ const commands = {
     '!today': handleToday,
     '!week': handleWeek,
     '!streak': handleStreak,
-    '!patterns': handlePatterns
+    '!patterns': handlePatterns,
+    '!test': handleTest  // Debug test command
 };
+
+// Add raw event debug listener
+client.on('raw', (packet) => {
+    // Only log MESSAGE_CREATE events for debugging
+    if (packet.t === 'MESSAGE_CREATE') {
+        console.log('🔔 Raw MESSAGE_CREATE event received');
+    }
+});
 
 // Bot ready event
 client.once('ready', async () => {
@@ -112,31 +127,86 @@ client.once('ready', async () => {
     console.log('🚀 Bot is fully operational and ready for commands!');
 });
 
+// Add debug test handler
+async function handleTest(message) {
+    console.log('🧪 Test command received!');
+    await message.reply('✅ Bot is working! I can receive and respond to your messages.');
+}
+
 // Message handler (supports both DMs and channel messages)
 client.on('messageCreate', async (message) => {
+    // Debug: Log all incoming messages
+    console.log('\n=== MESSAGE RECEIVED ===');
+    console.log(`📨 From: ${message.author.username} (ID: ${message.author.id})`);
+    console.log(`📝 Content: "${message.content}"`);
+    console.log(`📍 Location: ${!message.guild ? 'Direct Message' : `Guild: ${message.guild.name}`}`);
+    console.log(`🆔 Channel ID: ${message.channel.id}`);
+    console.log(`🤖 Is Bot: ${message.author.bot}`);
+
     // Ignore bot messages
-    if (message.author.bot) return;
+    if (message.author.bot) {
+        console.log('⚠️ Ignoring message from bot');
+        console.log('=== END MESSAGE ===\n');
+        return;
+    }
 
     // Check if message is from DM or allowed channel
     const isDM = !message.guild;
     const isAllowedChannel = CHANNEL_ID && message.channel.id === CHANNEL_ID;
 
-    // Accept DMs and messages from specified channel (if set)
-    if (!isDM && !isAllowedChannel && CHANNEL_ID) return;
+    console.log(`🔍 Checking permissions:`);
+    console.log(`   - Is Direct Message: ${isDM}`);
+    console.log(`   - CHANNEL_ID configured: ${CHANNEL_ID || '(empty - DM only mode)'}`);
+    console.log(`   - Is allowed channel: ${isAllowedChannel}`);
+
+    // Always accept DMs
+    if (isDM) {
+        console.log('✅ Accepting Direct Message');
+    }
+    // If CHANNEL_ID is set, accept messages from that channel
+    else if (CHANNEL_ID && isAllowedChannel) {
+        console.log('✅ Accepting message from configured channel');
+    }
+    // Otherwise, reject the message
+    else {
+        if (CHANNEL_ID) {
+            console.log(`⚠️ Ignoring - Not a DM and not in allowed channel (${CHANNEL_ID})`);
+        } else {
+            console.log('⚠️ Ignoring - Bot is in DM-only mode and this is not a DM');
+        }
+        console.log('=== END MESSAGE ===\n');
+        return;
+    }
+
+    console.log('✅ Message accepted for processing');
 
     // Check if message starts with a command
     const content = message.content.toLowerCase();
     const args = content.split(' ');
     const command = args[0];
 
+    console.log(`🔤 Parsing command:`);
+    console.log(`   - Raw content: "${message.content}"`);
+    console.log(`   - Lowercase: "${content}"`);
+    console.log(`   - Parsed command: "${command}"`);
+    console.log(`   - Arguments: "${args.slice(1).join(' ')}"`);
+
     if (commands[command]) {
+        console.log(`✅ Command recognized: ${command}`);
+        console.log(`🚀 Executing command handler...`);
         try {
             await commands[command](message, args.slice(1).join(' '));
+            console.log(`✅ Command ${command} completed successfully`);
         } catch (error) {
-            console.error(`Error handling command ${command}:`, error);
+            console.error(`❌ Error in ${command} handler:`, error);
             await message.reply('❌ An error occurred while processing your command. Please try again.');
         }
+    } else {
+        console.log(`ℹ️ Not a recognized command: "${command}"`);
+        console.log(`   Available commands: ${Object.keys(commands).join(', ')}`);
     }
+
+    console.log('=== END MESSAGE ===\n');
 });
 
 // Command handler functions
@@ -474,8 +544,16 @@ process.on('unhandledRejection', error => {
 });
 
 // Login to Discord
-client.login(DISCORD_TOKEN).catch(error => {
-    console.error('Failed to login to Discord:', error);
-    console.log('Please check your DISCORD_TOKEN in the .env file');
-    process.exit(1);
-});
+console.log('🔑 Attempting to login to Discord...');
+console.log(`   Token length: ${DISCORD_TOKEN ? DISCORD_TOKEN.length : 'undefined'} characters`);
+console.log(`   Token starts with: ${DISCORD_TOKEN ? DISCORD_TOKEN.substring(0, 20) + '...' : 'undefined'}`);
+
+client.login(DISCORD_TOKEN)
+    .then(() => {
+        console.log('🔐 Successfully authenticated with Discord');
+    })
+    .catch(error => {
+        console.error('❌ Failed to login to Discord:', error);
+        console.log('Please check your DISCORD_TOKEN in the .env file');
+        process.exit(1);
+    });
