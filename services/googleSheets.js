@@ -258,6 +258,16 @@ class GoogleSheetsService {
             // Extract Bristol scale for BM entries
             const bristolScale = entry.type === 'bm' ? (entry.bristolScale || '') : '';
 
+            // Handle notesAppend - merge additional metadata into Notes field
+            let notes = entry.notes || '';
+            if (entry.notesAppend) {
+                if (notes) {
+                    notes += '; ' + entry.notesAppend;
+                } else {
+                    notes = entry.notesAppend;
+                }
+            }
+
             // Build row values according to column schema
             const values = [[
                 timestamp,                           // Timestamp
@@ -270,7 +280,7 @@ class GoogleSheetsService {
                 confidence,                          // Confidence
                 followUpNeeded,                      // Follow_Up_Needed
                 bristolScale,                        // Bristol_Scale
-                entry.notes || '',                   // Notes
+                notes,                               // Notes (with optional append)
                 date,                                // Date
                 entry.source || 'DM'                 // Source
             ]];
@@ -288,11 +298,20 @@ class GoogleSheetsService {
             const rowNumber = response.data.updates.updatedRange.match(/\d+$/)[0];
             this.lastEntryRow = rowNumber;
 
-            console.log(`Logged entry to Google Sheets: ${entry.type} for ${entry.user} (Category: ${category})`);
-            return response.data;
+            console.log(`✅ Logged to Sheets: ${entry.type} for ${entry.user} (${category})`);
+            return { success: true, data: response.data, rowNumber };
         } catch (error) {
-            console.error('Error appending row to Google Sheets:', error);
-            throw error;
+            console.error('❌ Error appending row to Google Sheets:', error.message);
+
+            // Return structured error for better UX handling
+            return {
+                success: false,
+                error: {
+                    message: error.message,
+                    code: error.code || 'UNKNOWN',
+                    userMessage: 'I had trouble saving that entry. Please try again.'
+                }
+            };
         }
     }
 
