@@ -57,7 +57,7 @@ class GoogleSheetsService {
                                     title: this.sheetName,
                                     gridProperties: {
                                         rowCount: 10000,
-                                        columnCount: 8
+                                        columnCount: 9  // Added Category column
                                     }
                                 }
                             }
@@ -68,7 +68,7 @@ class GoogleSheetsService {
             }
 
             // Check if headers exist
-            const headerRange = `${this.sheetName}!A1:H1`;
+            const headerRange = `${this.sheetName}!A1:I1`;  // Extended to I for Category
             const headerResponse = await this.sheets.spreadsheets.values.get({
                 spreadsheetId: this.spreadsheetId,
                 range: headerRange
@@ -76,7 +76,7 @@ class GoogleSheetsService {
 
             if (!headerResponse.data.values || headerResponse.data.values[0]?.length === 0) {
                 // Add headers
-                const headers = [['Timestamp', 'User', 'Type', 'Details', 'Severity', 'Notes', 'Date', 'Source']];
+                const headers = [['Timestamp', 'User', 'Type', 'Details', 'Severity', 'Category', 'Notes', 'Date', 'Source']];
                 await this.sheets.spreadsheets.values.update({
                     spreadsheetId: this.spreadsheetId,
                     range: headerRange,
@@ -150,6 +150,7 @@ class GoogleSheetsService {
                 entry.type,
                 entry.value || entry.details || '',
                 entry.severity || '',
+                entry.category || '',  // Category column
                 entry.notes || '',
                 date,
                 entry.source || 'DM'  // Default to DM if not specified
@@ -157,11 +158,15 @@ class GoogleSheetsService {
 
             const response = await this.sheets.spreadsheets.values.append({
                 spreadsheetId: this.spreadsheetId,
-                range: `${this.sheetName}!A:H`,
+                range: `${this.sheetName}!A:I`,  // Extended to I for Category
                 valueInputOption: 'RAW',
                 insertDataOption: 'INSERT_ROWS',
                 resource: { values }
             });
+
+            // Store row number for undo functionality
+            const rowNumber = response.data.updates.updatedRange.match(/\d+$/)[0];
+            this.lastEntryRow = rowNumber;
 
             console.log(`Logged entry to Google Sheets: ${entry.type} for ${entry.user}`);
             return response.data;
@@ -177,7 +182,7 @@ class GoogleSheetsService {
         try {
             const response = await this.sheets.spreadsheets.values.get({
                 spreadsheetId: this.spreadsheetId,
-                range: `${this.sheetName}!A2:H` // Skip header row, include Source column
+                range: `${this.sheetName}!A2:I` // Skip header row, include Category and Source columns
             });
 
             if (!response.data.values) return [];
@@ -189,9 +194,10 @@ class GoogleSheetsService {
                 type: row[2] || '',
                 value: row[3] || '',
                 severity: row[4] || '',
-                notes: row[5] || '',
-                date: row[6] || '',
-                source: row[7] || 'DM'
+                category: row[5] || '',
+                notes: row[6] || '',
+                date: row[7] || '',
+                source: row[8] || 'DM'
             }));
 
             // Apply filters
@@ -284,6 +290,49 @@ class GoogleSheetsService {
         return Array.from(users);
     }
 
+    async undoLastEntry(userName) {
+        if (!this.initialized) await this.initialize();
+
+        try {
+            // Get all entries for the user
+            const entries = await this.getAllEntries(userName);
+            if (entries.length === 0) {
+                return { success: false, message: 'No entries found to undo' };
+            }
+
+            // Get the last entry's row number
+            const lastEntryIndex = entries.length + 1; // +1 for header row
+
+            // Delete the last row for this user
+            const requests = [{
+                deleteDimension: {
+                    range: {
+                        sheetId: await this.getSheetId(),
+                        dimension: 'ROWS',
+                        startIndex: lastEntryIndex,
+                        endIndex: lastEntryIndex + 1
+                    }
+                }
+            }];
+
+            await this.sheets.spreadsheets.batchUpdate({
+                spreadsheetId: this.spreadsheetId,
+                resource: { requests }
+            });
+
+            const lastEntry = entries[entries.length - 1];
+            console.log(`Undid last entry for ${userName}: ${lastEntry.type} - ${lastEntry.value}`);
+            return {
+                success: true,
+                message: `Removed: ${lastEntry.type} - ${lastEntry.value}`,
+                entry: lastEntry
+            };
+        } catch (error) {
+            console.error('Error undoing entry:', error);
+            return { success: false, message: 'Failed to undo entry' };
+        }
+    }
+
     async clearSheet() {
         if (!this.initialized) await this.initialize();
 
@@ -291,7 +340,7 @@ class GoogleSheetsService {
             // Clear all data except headers
             await this.sheets.spreadsheets.values.clear({
                 spreadsheetId: this.spreadsheetId,
-                range: `${this.sheetName}!A2:G`
+                range: `${this.sheetName}!A2:I`  // Updated to include Category column
             });
 
             console.log('Cleared all data from sheet (headers preserved)');

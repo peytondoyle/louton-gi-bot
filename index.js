@@ -11,6 +11,7 @@ const cron = require('node-cron');
 const moment = require('moment-timezone');
 const googleSheets = require('./services/googleSheets');
 const analyzer = require('./utils/analyzer');
+const NLPHandler = require('./utils/nlpHandler');
 const keepAlive = require('./keep_alive');
 
 // Start keep-alive server for Replit deployment
@@ -87,6 +88,7 @@ const commands = {
     '!week': handleWeek,
     '!streak': handleStreak,
     '!patterns': handlePatterns,
+    '!undo': handleUndo,
     '!test': handleTest  // Debug test command
 };
 
@@ -185,12 +187,12 @@ client.on('messageCreate', async (message) => {
     const args = content.split(' ');
     const command = args[0];
 
-    console.log(`🔤 Parsing command:`);
+    console.log(`🔤 Parsing message:`);
     console.log(`   - Raw content: "${message.content}"`);
     console.log(`   - Lowercase: "${content}"`);
-    console.log(`   - Parsed command: "${command}"`);
-    console.log(`   - Arguments: "${args.slice(1).join(' ')}"`);
+    console.log(`   - First word: "${command}"`);
 
+    // Check for explicit commands first
     if (commands[command]) {
         console.log(`✅ Command recognized: ${command}`);
         console.log(`🚀 Executing command handler...`);
@@ -201,9 +203,23 @@ client.on('messageCreate', async (message) => {
             console.error(`❌ Error in ${command} handler:`, error);
             await message.reply('❌ An error occurred while processing your command. Please try again.');
         }
-    } else {
+    }
+    // Try natural language processing if not a command
+    else if (!command.startsWith('!')) {
+        console.log('🧠 Attempting natural language processing...');
+        const nlpResult = NLPHandler.analyzeMessage(message.content);
+
+        if (nlpResult) {
+            console.log(`✅ NLP understood: ${nlpResult.type} (${nlpResult.confidence} confidence)`);
+            await handleNLPResult(message, nlpResult);
+        } else {
+            console.log('❓ Could not understand message via NLP');
+            // Don't reply to avoid spam, just log it
+        }
+    }
+    else {
         console.log(`ℹ️ Not a recognized command: "${command}"`);
-        console.log(`   Available commands: ${Object.keys(commands).join(', ')}`);
+        await message.reply(`❓ Command not recognized. Available commands: ${Object.keys(commands).join(', ')}`);
     }
 
     console.log('=== END MESSAGE ===\n');
@@ -219,19 +235,19 @@ async function handleFood(message, args) {
     const timestamp = moment().tz(TIMEZONE).format('YYYY-MM-DD HH:mm:ss');
     const source = !message.guild ? 'DM' : 'Channel';
 
+    // Categorize the food
+    const category = NLPHandler.categorizeItem('food', args);
+
     // Check for trigger foods
     const foodLower = args.toLowerCase();
     let reaction = '✅';
     let response = RESPONSES.general[Math.floor(Math.random() * RESPONSES.general.length)];
 
-    if (TRIGGER_ITEMS.positive.some(item => foodLower.includes(item))) {
+    if (category === 'Safe Food' || TRIGGER_ITEMS.positive.some(item => foodLower.includes(item))) {
         reaction = '💪';
         response = RESPONSES.positive[Math.floor(Math.random() * RESPONSES.positive.length)];
-    } else if (TRIGGER_ITEMS.warning.some(item => foodLower.includes(item))) {
+    } else if (category === 'Trigger Food' || TRIGGER_ITEMS.warning.some(item => foodLower.includes(item)) || TRIGGER_ITEMS.problematic.some(item => foodLower.includes(item))) {
         reaction = '⚠️';
-        response = RESPONSES.warning[Math.floor(Math.random() * RESPONSES.warning.length)];
-    } else if (TRIGGER_ITEMS.problematic.some(item => foodLower.includes(item))) {
-        reaction = '🔍';
         response = RESPONSES.warning[Math.floor(Math.random() * RESPONSES.warning.length)];
     }
 
@@ -242,13 +258,14 @@ async function handleFood(message, args) {
         type: 'food',
         value: args,
         severity: null,
+        category: category,
         notes: null,
         source: source
     });
 
     // React and respond
     await message.react(reaction);
-    await message.reply(`${response}\n📝 Logged: **${args}**`);
+    await message.reply(`${response}\n📝 Logged: **${args}** (${category})`);
 }
 
 async function handleDrink(message, args) {
@@ -260,15 +277,18 @@ async function handleDrink(message, args) {
     const timestamp = moment().tz(TIMEZONE).format('YYYY-MM-DD HH:mm:ss');
     const source = !message.guild ? 'DM' : 'Channel';
 
+    // Categorize the drink
+    const category = NLPHandler.categorizeItem('drink', args);
+
     // Check for trigger drinks
     const drinkLower = args.toLowerCase();
     let reaction = '✅';
     let response = RESPONSES.general[Math.floor(Math.random() * RESPONSES.general.length)];
 
-    if (drinkLower.includes('chai') || drinkLower.includes('water') || drinkLower.includes('tea')) {
+    if (category === 'Safe Drink' || drinkLower.includes('chai') || drinkLower.includes('water') || drinkLower.includes('tea')) {
         reaction = '💪';
         response = RESPONSES.positive[Math.floor(Math.random() * RESPONSES.positive.length)];
-    } else if (drinkLower.includes('refresher') || drinkLower.includes('coffee') || drinkLower.includes('alcohol')) {
+    } else if (category === 'Trigger Drink' || drinkLower.includes('refresher') || drinkLower.includes('coffee') || drinkLower.includes('alcohol')) {
         reaction = '⚠️';
         response = RESPONSES.warning[Math.floor(Math.random() * RESPONSES.warning.length)];
     }
@@ -280,13 +300,14 @@ async function handleDrink(message, args) {
         type: 'drink',
         value: args,
         severity: null,
+        category: category,
         notes: null,
         source: source
     });
 
     // React and respond
     await message.react(reaction);
-    await message.reply(`${response}\n🥤 Logged: **${args}**`);
+    await message.reply(`${response}\n🥤 Logged: **${args}** (${category})`);
 }
 
 async function handleSymptom(message, args) {
@@ -312,6 +333,7 @@ async function handleSymptom(message, args) {
         type: 'symptom',
         value: symptomDescription,
         severity: severity,
+        category: 'Symptom',
         notes: null,
         source: source
     });
@@ -338,6 +360,7 @@ async function handleBM(message, args) {
         type: 'bm',
         value: description,
         severity: null,
+        category: 'Bowel Movement',
         notes: null,
         source: source
     });
@@ -363,6 +386,7 @@ async function handleReflux(message, args) {
         type: 'reflux',
         value: 'reflux episode',
         severity: severity,
+        category: 'Symptom',
         notes: args,
         source: source
     });
@@ -376,19 +400,15 @@ async function handleHelp(message) {
     const embed = new EmbedBuilder()
         .setColor(0x0099FF)
         .setTitle('📋 Louton GI Bot Commands')
-        .setDescription('Track your symptoms and food intake with these commands:')
+        .setDescription('Track your symptoms and food intake with commands OR natural language!')
         .addFields(
-            { name: '!food [description]', value: 'Log what you ate\n`!food chicken salad with ranch`', inline: false },
-            { name: '!drink [description]', value: 'Log what you drank\n`!drink chai with oat milk`', inline: false },
-            { name: '!symptom [description] [severity]', value: 'Log symptoms\n`!symptom stomach pain moderate`', inline: false },
-            { name: '!bm [description]', value: 'Log bowel movement\n`!bm normal` or `!bm bristol 4`', inline: false },
-            { name: '!reflux [severity]', value: 'Log reflux episode\n`!reflux mild`', inline: false },
-            { name: '!today', value: 'See your entries from today', inline: true },
-            { name: '!week', value: 'Get weekly summary', inline: true },
-            { name: '!streak', value: 'Check your streak', inline: true },
-            { name: '!patterns', value: 'Analyze patterns in your data', inline: true }
+            { name: '🍽️ Food & Drink', value: '`!food [item]` - Log food\n`!drink [item]` - Log drinks\n\n**OR just say:** "just had pizza" or "drinking chai"', inline: false },
+            { name: '🩺 Symptoms', value: '`!symptom [desc] [severity]` - Log symptoms\n`!reflux [severity]` - Log reflux\n`!bm [description]` - Log BM\n\n**OR just say:** "stomach hurts" or "reflux is bad"', inline: false },
+            { name: '📊 Summaries', value: '`!today` - Today\'s entries\n`!week` - Weekly summary\n`!streak` - Check streak\n`!patterns` - Analyze patterns', inline: false },
+            { name: '🔧 Utilities', value: '`!undo` - Remove last entry\n`!help` - Show this help\n`!test` - Test bot response', inline: false },
+            { name: '✨ Natural Language', value: 'Just tell me how you feel!\n• "feeling good today"\n• "just had chai"\n• "reflux is acting up"\n• "stomach pain mild"', inline: false }
         )
-        .setFooter({ text: 'Keep tracking consistently for better insights!' });
+        .setFooter({ text: '💡 Tip: The bot understands natural language! Just tell it what you ate or how you feel.' });
 
     await message.reply({ embeds: [embed] });
 }
@@ -511,6 +531,93 @@ function getUserName(discordUsername) {
     // Simply return the actual Discord username for proper tracking
     // This ensures each user's entries are tracked separately
     return discordUsername;
+}
+
+// Handle NLP results
+async function handleNLPResult(message, nlpResult) {
+    const userName = getUserName(message.author.username);
+    const timestamp = moment().tz(TIMEZONE).format('YYYY-MM-DD HH:mm:ss');
+    const source = !message.guild ? 'DM' : 'Channel';
+
+    // Handle severity prompts
+    if (nlpResult.needsSeverity) {
+        await message.reply(nlpResult.response);
+        return;
+    }
+
+    // Log to Google Sheets based on type
+    try {
+        const entry = {
+            timestamp,
+            user: userName,
+            type: nlpResult.type,
+            value: nlpResult.value,
+            severity: nlpResult.severity || '',
+            category: nlpResult.category,
+            notes: '',
+            source: source
+        };
+
+        await googleSheets.appendRow(entry);
+
+        // Add appropriate reaction
+        if (nlpResult.isTrigger) {
+            await message.react('⚠️');
+        } else if (nlpResult.type === 'positive') {
+            await message.react('🌟');
+        } else if (nlpResult.type === 'symptom') {
+            await message.react('💙');
+        } else {
+            await message.react('✅');
+        }
+
+        // Send response
+        await message.reply(nlpResult.response);
+
+        // Additional smart responses based on patterns
+        if (nlpResult.isTrigger) {
+            // Check recent symptoms for this user
+            const recentEntries = await googleSheets.getTodayEntries(userName);
+            const hasSymptoms = recentEntries.some(e => e.type === 'symptom' || e.type === 'reflux');
+
+            if (hasSymptoms) {
+                await message.reply('⚠️ I notice you\'ve had symptoms today. This trigger might be related - consider avoiding it for a few days.');
+            }
+        }
+
+        // Check for positive streaks
+        if (nlpResult.type === 'positive') {
+            const todayEntries = await googleSheets.getTodayEntries(userName);
+            const positiveCount = todayEntries.filter(e => e.category === 'Improvement').length;
+
+            if (positiveCount >= 3) {
+                await message.reply('🎉 You\'re having a great day! Keep doing what you\'re doing!');
+            }
+        }
+
+    } catch (error) {
+        console.error('Error processing NLP result:', error);
+        await message.reply('❌ Failed to log your entry. Please try using a command instead.');
+    }
+}
+
+// Handle undo command
+async function handleUndo(message) {
+    const userName = getUserName(message.author.username);
+
+    try {
+        const result = await googleSheets.undoLastEntry(userName);
+
+        if (result.success) {
+            await message.react('↩️');
+            await message.reply(`✅ ${result.message}`);
+        } else {
+            await message.reply(`❌ ${result.message}`);
+        }
+    } catch (error) {
+        console.error('Error undoing entry:', error);
+        await message.reply('❌ Failed to undo last entry. Please try again.');
+    }
 }
 
 function setupReminders() {
