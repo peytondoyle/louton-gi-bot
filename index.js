@@ -489,89 +489,81 @@ function getTypeEmoji(type) {
 
 // Message handler (supports both DMs and channel messages)
 client.on('messageCreate', async (message) => {
-    // Debug: Log all incoming messages
-    console.log('\n=== MESSAGE RECEIVED ===');
-    console.log(`📨 From: ${message.author.username} (ID: ${message.author.id})`);
-    console.log(`📝 Content: "${message.content}"`);
-    console.log(`📍 Location: ${!message.guild ? 'Direct Message' : `Guild: ${message.guild.name}`}`);
-    console.log(`🆔 Channel ID: ${message.channel.id}`);
-    console.log(`🤖 Is Bot: ${message.author.bot}`);
-
-    // Ignore bot messages
-    if (message.author.bot) {
-        console.log('⚠️ Ignoring message from bot');
-        console.log('=== END MESSAGE ===\n');
-        return;
-    }
-
-    // Check if message is from DM or allowed channel
-    const isDM = !message.guild;
-    const isAllowedChannel = CHANNEL_ID && message.channel.id === CHANNEL_ID;
-
-    console.log(`🔍 Checking permissions:`);
-    console.log(`   - Is Direct Message: ${isDM}`);
-    console.log(`   - CHANNEL_ID configured: ${CHANNEL_ID || '(empty - DM only mode)'}`);
-    console.log(`   - Is allowed channel: ${isAllowedChannel}`);
-
-    // Always accept DMs
-    if (isDM) {
-        console.log('✅ Accepting Direct Message');
-    }
-    // If CHANNEL_ID is set, accept messages from that channel
-    else if (CHANNEL_ID && isAllowedChannel) {
-        console.log('✅ Accepting message from configured channel');
-    }
-    // Otherwise, reject the message
-    else {
-        if (CHANNEL_ID) {
-            console.log(`⚠️ Ignoring - Not a DM and not in allowed channel (${CHANNEL_ID})`);
-        } else {
-            console.log('⚠️ Ignoring - Bot is in DM-only mode and this is not a DM');
+    try {
+        // Ignore bot messages
+        if (message.author.bot) {
+            return;
         }
-        console.log('=== END MESSAGE ===\n');
-        return;
-    }
 
-    console.log('✅ Message accepted for processing');
+        // Extract message info
+        const isDM = !message.guild;
+        const isAllowedChannel = CHANNEL_ID && message.channel.id === CHANNEL_ID;
+        const content = (message.content || '').trim();
+        const hasPrefix = content.startsWith('!');
+        const isSlash = !!message.interaction;
+        const isCommand = hasPrefix || isSlash;
 
-    // Check if message starts with a command
-    const content = message.content.toLowerCase();
-    const args = content.split(' ');
-    const command = args[0];
-
-    console.log(`🔤 Parsing message:`);
-    console.log(`   - Raw content: "${message.content}"`);
-    console.log(`   - Lowercase: "${content}"`);
-    console.log(`   - First word: "${command}"`);
-
-    // Check for explicit commands first
-    if (commands[command]) {
-        console.log(`✅ Command recognized: ${command}`);
-        console.log(`🚀 Executing command handler...`);
-        try {
-            await commands[command](message, args.slice(1).join(' '));
-            console.log(`✅ Command ${command} completed successfully`);
-        } catch (error) {
-            console.error(`❌ Error in ${command} handler:`, error);
-            await message.reply('❌ An error occurred while processing your command. Please try again.');
+        // Permission check: Only process DMs or allowed channel messages
+        if (!isDM && !isAllowedChannel) {
+            return; // Silently ignore messages from other channels
         }
-    }
-    // Try natural language processing if not a command
-    else if (!command.startsWith('!')) {
-        console.log('🧠 Using NLU system for natural language...');
-        try {
+
+        // Log routing decision
+        const route = isDM && !isCommand ? 'NLU' : (isCommand ? 'COMMAND' : 'IGNORE');
+        console.log(`\n[ROUTER] 📨 From: ${message.author.username} | isDM=${isDM} | hasPrefix=${hasPrefix} | Route: ${route}`);
+        console.log(`[ROUTER] 📝 Content: "${content}"`);
+
+        // ========== ROUTE 1: DM + No Prefix = NLU ==========
+        if (isDM && !isCommand) {
+            console.log('[ROUTER] ✅ Routing to NLU handler');
             await handleNaturalLanguage(message);
-        } catch (error) {
-            console.error('❌ Error in NLU handler:', error);
-            await message.reply('❌ An error occurred while processing your message. Please try again or use a command.');
+            return;
+        }
+
+        // ========== ROUTE 2: Prefixed = Command ==========
+        if (isCommand && hasPrefix) {
+            console.log('[ROUTER] ✅ Routing to command handler');
+
+            // Parse command and args
+            const args = content.slice(1).split(/\s+/);
+            const command = args[0].toLowerCase();
+            const commandArgs = args.slice(1).join(' ');
+
+            console.log(`[ROUTER] 🔍 Command: "${command}" | Args: "${commandArgs}"`);
+
+            // Route to command handler
+            if (commands[`!${command}`]) {
+                await commands[`!${command}`](message, commandArgs);
+                console.log(`[ROUTER] ✅ Command !${command} completed`);
+            } else {
+                console.log(`[ROUTER] ❌ Unknown command: !${command}`);
+                await message.reply({
+                    content: `😅 Unknown command \`!${command}\`.\n\nAvailable commands: ${Object.keys(commands).join(', ')}\n\nOr just tell me in plain language what you ate or how you're feeling!`
+                });
+            }
+            return;
+        }
+
+        // ========== ROUTE 3: Channel + No Prefix = Try NLU if allowed ==========
+        if (isAllowedChannel && !isCommand) {
+            console.log('[ROUTER] ✅ Routing channel message to NLU handler');
+            await handleNaturalLanguage(message);
+            return;
+        }
+
+        // ========== ROUTE 4: Everything else = Ignore ==========
+        console.log('[ROUTER] ⚠️ Message ignored (no matching route)');
+
+    } catch (err) {
+        console.error('[ROUTER] ❌ Error in messageCreate handler:', err);
+        try {
+            if (!message.author.bot) {
+                await message.reply('😅 Oops — something went wrong handling that message. Please try again or use a command like `!help`.');
+            }
+        } catch (replyErr) {
+            console.error('[ROUTER] ❌ Failed to send error message:', replyErr);
         }
     }
-    else {
-        console.log(`ℹ️ Not a recognized command: "${command}"`);
-        await message.reply(`❓ Command not recognized. Available commands: ${Object.keys(commands).join(', ')}`);
-    }
-
-    console.log('=== END MESSAGE ===\n');
 });
 
 // Command handler functions
