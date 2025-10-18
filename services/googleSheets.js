@@ -7,7 +7,36 @@ class GoogleSheetsService {
         this.auth = null;
         this.spreadsheetId = process.env.GOOGLE_SHEETS_ID;
         this.sheetName = 'GI_Tracking';
+        this.insightsSheetName = 'Insights';
         this.initialized = false;
+
+        // Define the complete column schema
+        this.columnSchema = [
+            'Timestamp',
+            'User',
+            'Type',
+            'Details',
+            'Severity',
+            'Category',
+            'Meal_Type',
+            'Confidence',
+            'Follow_Up_Needed',
+            'Bristol_Scale',
+            'Notes',
+            'Date',
+            'Source'
+        ];
+
+        // Known trigger and safe items
+        this.knownTriggers = [
+            'coffee', 'citrus', 'tomato', 'spicy', 'carbonated', 'soda',
+            'alcohol', 'dairy', 'milk', 'cheese', 'fried', 'gluten', 'bread'
+        ];
+
+        this.knownSafe = [
+            'rice', 'oats', 'oatmeal', 'banana', 'chai', 'chicken',
+            'water', 'herbal tea', 'ginger tea', 'chamomile', 'toast', 'eggs'
+        ];
     }
 
     async initialize() {
@@ -26,6 +55,9 @@ class GoogleSheetsService {
 
             // Initialize sheet structure
             await this.initializeSheet();
+
+            // Initialize Insights sheet with formulas
+            await this.initializeInsightsSheet();
 
             this.initialized = true;
             console.log('✅ Google Sheets service initialized successfully');
@@ -57,7 +89,7 @@ class GoogleSheetsService {
                                     title: this.sheetName,
                                     gridProperties: {
                                         rowCount: 10000,
-                                        columnCount: 9  // Added Category column
+                                        columnCount: this.columnSchema.length  // Dynamic based on schema
                                     }
                                 }
                             }
@@ -67,22 +99,29 @@ class GoogleSheetsService {
                 console.log(`Created new sheet: ${this.sheetName}`);
             }
 
-            // Check if headers exist
-            const headerRange = `${this.sheetName}!A1:I1`;  // Extended to I for Category
+            // Check if headers exist and update if needed
+            const lastCol = String.fromCharCode(65 + this.columnSchema.length - 1); // A=65, so A + length - 1
+            const headerRange = `${this.sheetName}!A1:${lastCol}1`;
             const headerResponse = await this.sheets.spreadsheets.values.get({
                 spreadsheetId: this.spreadsheetId,
                 range: headerRange
             });
 
-            if (!headerResponse.data.values || headerResponse.data.values[0]?.length === 0) {
-                // Add headers
-                const headers = [['Timestamp', 'User', 'Type', 'Details', 'Severity', 'Category', 'Notes', 'Date', 'Source']];
+            const existingHeaders = headerResponse.data.values ? headerResponse.data.values[0] : [];
+            const needsUpdate = existingHeaders.length !== this.columnSchema.length ||
+                               !this.columnSchema.every((col, i) => existingHeaders[i] === col);
+
+            if (!headerResponse.data.values || headerResponse.data.values[0]?.length === 0 || needsUpdate) {
+                // Add or update headers
+                console.log('Updating sheet headers to match schema...');
+                const headers = [this.columnSchema];
                 await this.sheets.spreadsheets.values.update({
                     spreadsheetId: this.spreadsheetId,
                     range: headerRange,
                     valueInputOption: 'RAW',
                     resource: { values: headers }
                 });
+                console.log(`✅ Headers updated: ${this.columnSchema.join(', ')}`);
 
                 // Format headers (bold and frozen)
                 await this.sheets.spreadsheets.batchUpdate({
@@ -137,6 +176,65 @@ class GoogleSheetsService {
         return sheet.properties.sheetId;
     }
 
+    /**
+     * Auto-categorize an item based on known triggers and safe items
+     */
+    autoCategorize(type, value) {
+        if (!value) return 'Unknown';
+
+        const lowerValue = value.toLowerCase();
+
+        if (type === 'food' || type === 'drink') {
+            // Check if it's a known trigger
+            if (this.knownTriggers.some(trigger => lowerValue.includes(trigger))) {
+                return type === 'food' ? 'Trigger Food' : 'Trigger Drink';
+            }
+
+            // Check if it's known safe
+            if (this.knownSafe.some(safe => lowerValue.includes(safe))) {
+                return type === 'food' ? 'Safe Food' : 'Safe Drink';
+            }
+
+            return 'Neutral';
+        }
+
+        if (type === 'symptom' || type === 'reflux') {
+            return 'Symptom';
+        }
+
+        if (type === 'bm') {
+            return 'Bowel Movement';
+        }
+
+        if (type === 'positive') {
+            return 'Improvement';
+        }
+
+        return 'Unknown';
+    }
+
+    /**
+     * Extract meal type from notes or timestamp
+     */
+    determineMealType(notes, timestamp) {
+        if (!notes) {
+            // Determine by time if no notes
+            const hour = moment(timestamp).hour();
+            if (hour >= 5 && hour < 11) return 'Breakfast';
+            if (hour >= 11 && hour < 15) return 'Lunch';
+            if (hour >= 17 && hour < 22) return 'Dinner';
+            return 'Snack';
+        }
+
+        const lowerNotes = notes.toLowerCase();
+        if (lowerNotes.includes('breakfast')) return 'Breakfast';
+        if (lowerNotes.includes('lunch')) return 'Lunch';
+        if (lowerNotes.includes('dinner')) return 'Dinner';
+        if (lowerNotes.includes('snack')) return 'Snack';
+
+        return '';
+    }
+
     async appendRow(entry) {
         if (!this.initialized) await this.initialize();
 
@@ -144,21 +242,43 @@ class GoogleSheetsService {
             const timestamp = entry.timestamp || moment().tz(process.env.TIMEZONE || 'America/Los_Angeles').format('YYYY-MM-DD HH:mm:ss');
             const date = moment(timestamp).format('YYYY-MM-DD');
 
+            // Auto-categorize if not provided
+            const category = entry.category || this.autoCategorize(entry.type, entry.value || entry.details);
+
+            // Determine meal type for food/drink entries
+            const mealType = (entry.type === 'food' || entry.type === 'drink') ?
+                           (entry.mealType || this.determineMealType(entry.notes, timestamp)) : '';
+
+            // Determine confidence level
+            const confidence = entry.confidence || 'High';
+
+            // Check if follow-up is needed
+            const followUpNeeded = (entry.type === 'symptom' && entry.severity === 'severe') ? 'Yes' : 'No';
+
+            // Extract Bristol scale for BM entries
+            const bristolScale = entry.type === 'bm' ? (entry.bristolScale || '') : '';
+
+            // Build row values according to column schema
             const values = [[
-                timestamp,
-                entry.user,
-                entry.type,
-                entry.value || entry.details || '',
-                entry.severity || '',
-                entry.category || '',  // Category column
-                entry.notes || '',
-                date,
-                entry.source || 'DM'  // Default to DM if not specified
+                timestamp,                           // Timestamp
+                entry.user,                          // User
+                entry.type,                          // Type
+                entry.value || entry.details || '', // Details
+                entry.severity || '',                // Severity
+                category,                            // Category
+                mealType,                            // Meal_Type
+                confidence,                          // Confidence
+                followUpNeeded,                      // Follow_Up_Needed
+                bristolScale,                        // Bristol_Scale
+                entry.notes || '',                   // Notes
+                date,                                // Date
+                entry.source || 'DM'                 // Source
             ]];
 
+            const lastCol = String.fromCharCode(65 + this.columnSchema.length - 1);
             const response = await this.sheets.spreadsheets.values.append({
                 spreadsheetId: this.spreadsheetId,
-                range: `${this.sheetName}!A:I`,  // Extended to I for Category
+                range: `${this.sheetName}!A:${lastCol}`,
                 valueInputOption: 'RAW',
                 insertDataOption: 'INSERT_ROWS',
                 resource: { values }
@@ -168,7 +288,7 @@ class GoogleSheetsService {
             const rowNumber = response.data.updates.updatedRange.match(/\d+$/)[0];
             this.lastEntryRow = rowNumber;
 
-            console.log(`Logged entry to Google Sheets: ${entry.type} for ${entry.user}`);
+            console.log(`Logged entry to Google Sheets: ${entry.type} for ${entry.user} (Category: ${category})`);
             return response.data;
         } catch (error) {
             console.error('Error appending row to Google Sheets:', error);
@@ -180,14 +300,15 @@ class GoogleSheetsService {
         if (!this.initialized) await this.initialize();
 
         try {
+            const lastCol = String.fromCharCode(65 + this.columnSchema.length - 1);
             const response = await this.sheets.spreadsheets.values.get({
                 spreadsheetId: this.spreadsheetId,
-                range: `${this.sheetName}!A2:I` // Skip header row, include Category and Source columns
+                range: `${this.sheetName}!A2:${lastCol}` // Skip header row, get all columns
             });
 
             if (!response.data.values) return [];
 
-            // Convert rows to objects
+            // Convert rows to objects based on schema
             const rows = response.data.values.map(row => ({
                 timestamp: row[0] || '',
                 user: row[1] || '',
@@ -195,9 +316,13 @@ class GoogleSheetsService {
                 value: row[3] || '',
                 severity: row[4] || '',
                 category: row[5] || '',
-                notes: row[6] || '',
-                date: row[7] || '',
-                source: row[8] || 'DM'
+                mealType: row[6] || '',
+                confidence: row[7] || '',
+                followUpNeeded: row[8] || '',
+                bristolScale: row[9] || '',
+                notes: row[10] || '',
+                date: row[11] || '',
+                source: row[12] || 'DM'
             }));
 
             // Apply filters
@@ -333,14 +458,170 @@ class GoogleSheetsService {
         }
     }
 
+    async initializeInsightsSheet() {
+        // Don't call initialize() here - this is already called from initialize()
+        // Just check if sheets API is ready
+        if (!this.sheets) {
+            console.log('⚠️ Sheets API not ready, skipping Insights initialization');
+            return;
+        }
+
+        try {
+            // Check if Insights sheet exists
+            const response = await this.sheets.spreadsheets.get({
+                spreadsheetId: this.spreadsheetId
+            });
+
+            const insightsExists = response.data.sheets.some(
+                sheet => sheet.properties.title === this.insightsSheetName
+            );
+
+            if (!insightsExists) {
+                // Create the Insights sheet
+                await this.sheets.spreadsheets.batchUpdate({
+                    spreadsheetId: this.spreadsheetId,
+                    resource: {
+                        requests: [{
+                            addSheet: {
+                                properties: {
+                                    title: this.insightsSheetName,
+                                    gridProperties: {
+                                        rowCount: 100,
+                                        columnCount: 10
+                                    }
+                                }
+                            }
+                        }]
+                    }
+                });
+                console.log(`Created Insights sheet: ${this.insightsSheetName}`);
+            }
+
+            // Set up the Insights sheet structure with formulas
+            const insightsData = [
+                // Headers
+                ['Metric', 'Value', 'Last Updated'],
+
+                // Trigger frequency counts
+                ['=== TRIGGER FREQUENCY ===', '', ''],
+                ['Coffee Triggers', `=COUNTIFS(${this.sheetName}!C:C,"food",${this.sheetName}!D:D,"*coffee*") + COUNTIFS(${this.sheetName}!C:C,"drink",${this.sheetName}!D:D,"*coffee*")`, '=NOW()'],
+                ['Citrus Triggers', `=COUNTIFS(${this.sheetName}!C:C,"food",${this.sheetName}!D:D,"*citrus*") + COUNTIFS(${this.sheetName}!C:C,"food",${this.sheetName}!D:D,"*orange*") + COUNTIFS(${this.sheetName}!C:C,"food",${this.sheetName}!D:D,"*lemon*")`, '=NOW()'],
+                ['Tomato Triggers', `=COUNTIFS(${this.sheetName}!C:C,"food",${this.sheetName}!D:D,"*tomato*") + COUNTIFS(${this.sheetName}!C:C,"food",${this.sheetName}!D:D,"*pizza*")`, '=NOW()'],
+                ['Spicy Food Triggers', `=COUNTIFS(${this.sheetName}!C:C,"food",${this.sheetName}!D:D,"*spicy*")`, '=NOW()'],
+                ['Dairy Triggers', `=COUNTIFS(${this.sheetName}!C:C,"food",${this.sheetName}!D:D,"*dairy*") + COUNTIFS(${this.sheetName}!C:C,"food",${this.sheetName}!D:D,"*milk*") + COUNTIFS(${this.sheetName}!C:C,"food",${this.sheetName}!D:D,"*cheese*")`, '=NOW()'],
+
+                // Safe food success rates
+                ['', '', ''],
+                ['=== SAFE FOOD SUCCESS RATE ===', '', ''],
+                ['Rice Entries', `=COUNTIFS(${this.sheetName}!C:C,"food",${this.sheetName}!D:D,"*rice*")`, '=NOW()'],
+                ['Oats Entries', `=COUNTIFS(${this.sheetName}!C:C,"food",${this.sheetName}!D:D,"*oats*") + COUNTIFS(${this.sheetName}!C:C,"food",${this.sheetName}!D:D,"*oatmeal*")`, '=NOW()'],
+                ['Banana Entries', `=COUNTIFS(${this.sheetName}!C:C,"food",${this.sheetName}!D:D,"*banana*")`, '=NOW()'],
+                ['Chai Entries', `=COUNTIFS(${this.sheetName}!C:C,"drink",${this.sheetName}!D:D,"*chai*")`, '=NOW()'],
+                ['Chicken Entries', `=COUNTIFS(${this.sheetName}!C:C,"food",${this.sheetName}!D:D,"*chicken*")`, '=NOW()'],
+
+                // Symptom statistics
+                ['', '', ''],
+                ['=== SYMPTOM STATISTICS ===', '', ''],
+                ['Total Symptoms', `=COUNTIF(${this.sheetName}!C:C,"symptom") + COUNTIF(${this.sheetName}!C:C,"reflux")`, '=NOW()'],
+                ['Reflux Count', `=COUNTIF(${this.sheetName}!C:C,"reflux")`, '=NOW()'],
+                ['Avg Severity (1=mild, 2=moderate, 3=severe)', `=AVERAGE(IF(${this.sheetName}!E:E="mild",1,IF(${this.sheetName}!E:E="moderate",2,IF(${this.sheetName}!E:E="severe",3,""))))`, '=NOW()'],
+
+                // Category breakdown
+                ['', '', ''],
+                ['=== CATEGORY BREAKDOWN ===', '', ''],
+                ['Trigger Foods', `=COUNTIF(${this.sheetName}!F:F,"Trigger Food")`, '=NOW()'],
+                ['Safe Foods', `=COUNTIF(${this.sheetName}!F:F,"Safe Food")`, '=NOW()'],
+                ['Trigger Drinks', `=COUNTIF(${this.sheetName}!F:F,"Trigger Drink")`, '=NOW()'],
+                ['Safe Drinks', `=COUNTIF(${this.sheetName}!F:F,"Safe Drink")`, '=NOW()'],
+                ['Neutral Items', `=COUNTIF(${this.sheetName}!F:F,"Neutral")`, '=NOW()'],
+
+                // Time-of-day patterns (requires more complex logic, showing counts by hour)
+                ['', '', ''],
+                ['=== TIME PATTERNS (Last 7 Days) ===', '', ''],
+                ['Morning Symptoms (5am-11am)', `=COUNTIFS(${this.sheetName}!C:C,"symptom",${this.sheetName}!G:G,"Breakfast") + COUNTIFS(${this.sheetName}!C:C,"reflux",${this.sheetName}!G:G,"Breakfast")`, '=NOW()'],
+                ['Afternoon Symptoms (11am-5pm)', `=COUNTIFS(${this.sheetName}!C:C,"symptom",${this.sheetName}!G:G,"Lunch") + COUNTIFS(${this.sheetName}!C:C,"reflux",${this.sheetName}!G:G,"Lunch")`, '=NOW()'],
+                ['Evening Symptoms (5pm-10pm)', `=COUNTIFS(${this.sheetName}!C:C,"symptom",${this.sheetName}!G:G,"Dinner") + COUNTIFS(${this.sheetName}!C:C,"reflux",${this.sheetName}!G:G,"Dinner")`, '=NOW()'],
+
+                // Follow-up tracking
+                ['', '', ''],
+                ['=== FOLLOW-UP TRACKING ===', '', ''],
+                ['Items Needing Follow-Up', `=COUNTIF(${this.sheetName}!I:I,"Yes")`, '=NOW()'],
+                ['High Confidence Logs', `=COUNTIF(${this.sheetName}!H:H,"High")`, '=NOW()'],
+                ['Low Confidence Logs (review)', `=COUNTIF(${this.sheetName}!H:H,"Low")`, '=NOW()']
+            ];
+
+            // Write the insights data
+            await this.sheets.spreadsheets.values.update({
+                spreadsheetId: this.spreadsheetId,
+                range: `${this.insightsSheetName}!A1`,
+                valueInputOption: 'USER_ENTERED', // This allows formulas to be processed
+                resource: { values: insightsData }
+            });
+
+            // Format the Insights sheet
+            const insightsSheetId = await this.getInsightsSheetId();
+            await this.sheets.spreadsheets.batchUpdate({
+                spreadsheetId: this.spreadsheetId,
+                resource: {
+                    requests: [
+                        {
+                            repeatCell: {
+                                range: {
+                                    sheetId: insightsSheetId,
+                                    startRowIndex: 0,
+                                    endRowIndex: 1
+                                },
+                                cell: {
+                                    userEnteredFormat: {
+                                        textFormat: { bold: true, fontSize: 12 },
+                                        backgroundColor: { red: 0.2, green: 0.5, blue: 0.8 },
+                                        horizontalAlignment: 'CENTER'
+                                    }
+                                },
+                                fields: 'userEnteredFormat(textFormat,backgroundColor,horizontalAlignment)'
+                            }
+                        },
+                        {
+                            updateSheetProperties: {
+                                properties: {
+                                    sheetId: insightsSheetId,
+                                    gridProperties: { frozenRowCount: 1 }
+                                },
+                                fields: 'gridProperties.frozenRowCount'
+                            }
+                        }
+                    ]
+                }
+            });
+
+            console.log('✅ Insights sheet initialized with formulas');
+        } catch (error) {
+            console.error('Error initializing Insights sheet:', error);
+            throw error;
+        }
+    }
+
+    async getInsightsSheetId() {
+        const response = await this.sheets.spreadsheets.get({
+            spreadsheetId: this.spreadsheetId
+        });
+
+        const sheet = response.data.sheets.find(
+            s => s.properties.title === this.insightsSheetName
+        );
+
+        return sheet ? sheet.properties.sheetId : null;
+    }
+
     async clearSheet() {
         if (!this.initialized) await this.initialize();
 
         try {
-            // Clear all data except headers
+            // Clear all data except headers - dynamically calculated range
+            const lastCol = String.fromCharCode(65 + this.columnSchema.length - 1);
             await this.sheets.spreadsheets.values.clear({
                 spreadsheetId: this.spreadsheetId,
-                range: `${this.sheetName}!A2:I`  // Updated to include Category column
+                range: `${this.sheetName}!A2:${lastCol}`
             });
 
             console.log('Cleared all data from sheet (headers preserved)');
