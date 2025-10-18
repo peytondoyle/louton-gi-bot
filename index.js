@@ -12,6 +12,8 @@ const moment = require('moment-timezone');
 const googleSheets = require('./services/googleSheets');
 const analyzer = require('./utils/analyzer');
 const NLPHandler = require('./utils/nlpHandler');
+const PatternAnalyzer = require('./utils/patternAnalyzer');
+const ClarificationHandler = require('./utils/clarificationHandler');
 const keepAlive = require('./keep_alive');
 
 // Start keep-alive server for Replit deployment
@@ -89,6 +91,10 @@ const commands = {
     '!streak': handleStreak,
     '!patterns': handlePatterns,
     '!undo': handleUndo,
+    '!insights': handleInsights,
+    '!triggers': handleTriggers,
+    '!trends': handleTrends,
+    '!weekly': handleWeeklySummary,
     '!test': handleTest  // Debug test command
 };
 
@@ -207,14 +213,43 @@ client.on('messageCreate', async (message) => {
     // Try natural language processing if not a command
     else if (!command.startsWith('!')) {
         console.log('🧠 Attempting natural language processing...');
+
+        // First check if user has pending clarification
+        if (ClarificationHandler.hasPendingClarification(message.author.id)) {
+            console.log('📝 Processing clarification response...');
+            const clarificationResult = await ClarificationHandler.processClarificationResponse(
+                message.author.id,
+                message.content
+            );
+
+            if (clarificationResult && !clarificationResult.expired) {
+                // Process the clarified message
+                await handleClarifiedMessage(message, clarificationResult);
+                console.log('=== END MESSAGE ===\n');
+                return;
+            }
+        }
+
         const nlpResult = NLPHandler.analyzeMessage(message.content);
 
         if (nlpResult) {
             console.log(`✅ NLP understood: ${nlpResult.type} (${nlpResult.confidence} confidence)`);
-            await handleNLPResult(message, nlpResult);
+
+            // Check if needs clarification
+            const needsClarification = ClarificationHandler.needsClarification(message.content, nlpResult);
+            if (needsClarification) {
+                console.log('❓ Message needs clarification');
+                await ClarificationHandler.askClarification(needsClarification.type, message.content, message);
+            } else {
+                await handleNLPResult(message, nlpResult);
+            }
         } else {
             console.log('❓ Could not understand message via NLP');
-            // Don't reply to avoid spam, just log it
+            // Check if the message is vague and needs clarification
+            const needsClarification = ClarificationHandler.needsClarification(message.content, null);
+            if (needsClarification) {
+                await ClarificationHandler.askClarification(needsClarification.type, message.content, message);
+            }
         }
     }
     else {
@@ -617,6 +652,281 @@ async function handleUndo(message) {
     } catch (error) {
         console.error('Error undoing entry:', error);
         await message.reply('❌ Failed to undo last entry. Please try again.');
+    }
+}
+
+// Handle clarified messages
+async function handleClarifiedMessage(message, clarificationResult) {
+    const userName = getUserName(message.author.username);
+    const timestamp = moment().tz(TIMEZONE).format('YYYY-MM-DD HH:mm:ss');
+    const source = !message.guild ? 'DM' : 'Channel';
+
+    try {
+        let entry = {};
+
+        switch (clarificationResult.type) {
+            case 'symptom_type':
+                const parsed = clarificationResult.parsedType;
+                entry = {
+                    timestamp,
+                    user: userName,
+                    type: parsed.type,
+                    value: parsed.value,
+                    severity: 'moderate',
+                    category: parsed.category,
+                    notes: clarificationResult.originalMessage,
+                    source
+                };
+                await googleSheets.appendRow(entry);
+                await message.reply(`✅ Logged ${parsed.value} symptom. Take care! 💙`);
+                break;
+
+            case 'meal_context':
+                const mealContext = clarificationResult.parsedContext;
+                entry = {
+                    timestamp,
+                    user: userName,
+                    type: 'food',
+                    value: `${clarificationResult.originalMessage} (${mealContext.context})`,
+                    severity: null,
+                    category: 'Neutral',
+                    notes: `${mealContext.time} meal`,
+                    source
+                };
+                await googleSheets.appendRow(entry);
+                await message.reply(`✅ Logged for ${mealContext.context}! 📝`);
+                break;
+
+            case 'bm_detail':
+                const bmDetail = clarificationResult.parsedDetail;
+                entry = {
+                    timestamp,
+                    user: userName,
+                    type: 'bm',
+                    value: bmDetail.description,
+                    severity: null,
+                    category: 'Bowel Movement',
+                    notes: `Bristol scale: ${bmDetail.bristol}`,
+                    source
+                };
+                await googleSheets.appendRow(entry);
+                await message.reply(`✅ Logged bowel movement: ${bmDetail.description} 📝`);
+                break;
+
+            case 'improvement_type':
+                const improvement = clarificationResult.parsedImprovement;
+                entry = {
+                    timestamp,
+                    user: userName,
+                    type: improvement.type,
+                    value: improvement.symptom || improvement.description,
+                    severity: null,
+                    category: 'Improvement',
+                    notes: clarificationResult.originalMessage,
+                    source
+                };
+                await googleSheets.appendRow(entry);
+                await message.reply(`✅ Great to hear you're feeling better! 🌟`);
+                break;
+        }
+
+        await message.react('✅');
+    } catch (error) {
+        console.error('Error processing clarified message:', error);
+        await message.reply('❌ Failed to log entry. Please try again.');
+    }
+}
+
+// Handle insights command - show pattern insights
+async function handleInsights(message) {
+    const userName = getUserName(message.author.username);
+
+    try {
+        const entries = await googleSheets.getAllEntries(userName);
+
+        if (entries.length < 10) {
+            return message.reply('📊 You need at least 10 entries for meaningful insights. Keep tracking!');
+        }
+
+        const recommendations = await PatternAnalyzer.getRecommendations(entries, userName);
+        const trends = await PatternAnalyzer.calculateTrends(entries, userName);
+
+        const embed = new EmbedBuilder()
+            .setColor(0x9B59B6)
+            .setTitle('🔮 Your Personalized Insights')
+            .setDescription(trends.message)
+            .setTimestamp();
+
+        if (recommendations.length > 0) {
+            recommendations.forEach(rec => {
+                const emoji = rec.type === 'avoid' ? '⚠️' :
+                             rec.type === 'positive' ? '🌟' : 'ℹ️';
+                embed.addFields({
+                    name: `${emoji} ${rec.priority.toUpperCase()} Priority`,
+                    value: rec.message,
+                    inline: false
+                });
+            });
+        }
+
+        await message.reply({ embeds: [embed] });
+    } catch (error) {
+        console.error('Error generating insights:', error);
+        await message.reply('❌ Failed to generate insights. Please try again.');
+    }
+}
+
+// Handle triggers command - show trigger correlations
+async function handleTriggers(message) {
+    const userName = getUserName(message.author.username);
+
+    try {
+        const entries = await googleSheets.getAllEntries(userName);
+
+        if (entries.length < 5) {
+            return message.reply('📊 You need more entries to detect trigger patterns. Keep tracking!');
+        }
+
+        const patterns = await PatternAnalyzer.findRepeatedPatterns(entries, userName);
+        const combinations = await PatternAnalyzer.findCombinationTriggers(entries, userName);
+
+        const embed = new EmbedBuilder()
+            .setColor(0xE74C3C)
+            .setTitle('⚠️ Trigger Analysis')
+            .setTimestamp();
+
+        if (patterns.length > 0) {
+            const triggerList = patterns.slice(0, 5).map((p, i) =>
+                `${i + 1}. **${p.trigger}** - Linked to symptoms ${p.count} times`
+            ).join('\n');
+
+            embed.addFields({
+                name: '🔍 Top Triggers',
+                value: triggerList || 'No clear triggers detected yet',
+                inline: false
+            });
+        }
+
+        if (combinations.length > 0) {
+            const comboList = combinations.slice(0, 3).map((c, i) =>
+                `${i + 1}. ${c.combination} (${c.count}x)`
+            ).join('\n');
+
+            embed.addFields({
+                name: '🔗 Combination Triggers',
+                value: comboList,
+                inline: false
+            });
+        }
+
+        if (patterns.length === 0 && combinations.length === 0) {
+            embed.setDescription('No strong trigger patterns detected yet. Keep tracking to identify patterns!');
+        }
+
+        await message.reply({ embeds: [embed] });
+    } catch (error) {
+        console.error('Error analyzing triggers:', error);
+        await message.reply('❌ Failed to analyze triggers. Please try again.');
+    }
+}
+
+// Handle trends command - show symptom trends
+async function handleTrends(message) {
+    const userName = getUserName(message.author.username);
+
+    try {
+        const entries = await googleSheets.getAllEntries(userName);
+
+        if (entries.length < 5) {
+            return message.reply('📊 You need more entries to calculate trends. Keep tracking!');
+        }
+
+        const trends = await PatternAnalyzer.calculateTrends(entries, userName, 7);
+        const timePattern = await PatternAnalyzer.findTimePatterns(entries, userName);
+
+        const embed = new EmbedBuilder()
+            .setColor(trends.trend === 'improving' ? 0x2ECC71 :
+                     trends.trend === 'worsening' ? 0xE74C3C : 0x95A5A6)
+            .setTitle('📈 Your Health Trends')
+            .setDescription(trends.message)
+            .addFields(
+                { name: 'Average Symptoms/Day', value: trends.avgPerDay, inline: true },
+                { name: 'Total This Week', value: trends.totalSymptoms.toString(), inline: true }
+            )
+            .setTimestamp();
+
+        if (timePattern.hasPattern) {
+            embed.addFields({
+                name: '⏰ Time Pattern',
+                value: timePattern.message,
+                inline: false
+            });
+        }
+
+        await message.reply({ embeds: [embed] });
+    } catch (error) {
+        console.error('Error calculating trends:', error);
+        await message.reply('❌ Failed to calculate trends. Please try again.');
+    }
+}
+
+// Handle weekly summary command
+async function handleWeeklySummary(message) {
+    const userName = getUserName(message.author.username);
+
+    try {
+        const entries = await googleSheets.getAllEntries(userName);
+
+        if (entries.length < 3) {
+            return message.reply('📊 You need more entries for a weekly summary. Keep tracking!');
+        }
+
+        const summary = await PatternAnalyzer.getWeeklySummary(entries, userName);
+
+        const embed = new EmbedBuilder()
+            .setColor(0x3498DB)
+            .setTitle(`📅 Weekly Summary (Week of ${summary.weekStart})`)
+            .addFields(
+                { name: '📊 Days Tracked', value: summary.daysTracked.toString(), inline: true },
+                { name: '✅ Symptom-Free Days', value: summary.symptomFreeDays.toString(), inline: true },
+                { name: '⚠️ Total Symptoms', value: summary.totalSymptoms.toString(), inline: true }
+            )
+            .setTimestamp();
+
+        if (summary.worstTriggers.length > 0) {
+            const triggerList = summary.worstTriggers
+                .map((t, i) => `${i + 1}. ${t.name} (${t.count}x)`)
+                .join('\n');
+
+            embed.addFields({
+                name: '🚫 Worst Triggers This Week',
+                value: triggerList,
+                inline: false
+            });
+        }
+
+        if (summary.topSafeFoods.length > 0) {
+            const safeList = summary.topSafeFoods
+                .map((f, i) => `${i + 1}. ${f.name} (${f.count}x)`)
+                .join('\n');
+
+            embed.addFields({
+                name: '✅ Top Safe Foods',
+                value: safeList,
+                inline: false
+            });
+        }
+
+        embed.addFields({
+            name: '📈 Trend',
+            value: summary.trends.message,
+            inline: false
+        });
+
+        await message.reply({ embeds: [embed] });
+    } catch (error) {
+        console.error('Error generating weekly summary:', error);
+        await message.reply('❌ Failed to generate weekly summary. Please try again.');
     }
 }
 
