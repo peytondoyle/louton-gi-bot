@@ -931,6 +931,14 @@ async function handleFood_LEGACY_DISABLED(message, args) {
 }
 
 async function handleDrink(message, args) {
+    // Legacy command - redirect to NLU
+    if (!args) {
+        return message.reply('Please tell me what you drank. Example: "had chai with oat milk"');
+    }
+    await handleNaturalLanguage({ ...message, content: args });
+}
+
+async function handleDrink_LEGACY_DISABLED(message, args) {
     if (!args) {
         return message.reply('Please specify what you drank. Example: `!drink chai with oat milk`');
     }
@@ -973,6 +981,14 @@ async function handleDrink(message, args) {
 }
 
 async function handleSymptom(message, args) {
+    // Legacy command - redirect to NLU
+    if (!args) {
+        return message.reply('Please tell me how you\'re feeling. Example: "stomach pain" or "mild heartburn"');
+    }
+    await handleNaturalLanguage({ ...message, content: args });
+}
+
+async function handleSymptom_LEGACY_DISABLED(message, args) {
     if (!args) {
         return message.reply('Please describe your symptom. Example: `!symptom stomach pain mild`');
     }
@@ -1008,6 +1024,12 @@ async function handleSymptom(message, args) {
 }
 
 async function handleBM(message, args) {
+    // Legacy command - redirect to NLU
+    const text = args || 'had a bowel movement';
+    await handleNaturalLanguage({ ...message, content: text });
+}
+
+async function handleBM_LEGACY_DISABLED(message, args) {
     const userName = getUserName(message.author.username);
     const timestamp = moment().tz(TIMEZONE).format('YYYY-MM-DD HH:mm:ss');
     const source = !message.guild ? 'DM' : 'Channel';
@@ -1033,6 +1055,12 @@ async function handleBM(message, args) {
 }
 
 async function handleReflux(message, args) {
+    // Legacy command - redirect to NLU
+    const text = args ? `reflux ${args}` : 'reflux';
+    await handleNaturalLanguage({ ...message, content: text });
+}
+
+async function handleReflux_LEGACY_DISABLED(message, args) {
     const userName = getUserName(message.author.username);
     const timestamp = moment().tz(TIMEZONE).format('YYYY-MM-DD HH:mm:ss');
     const source = !message.guild ? 'DM' : 'Channel';
