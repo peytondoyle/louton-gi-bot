@@ -1,14 +1,19 @@
 /**
- * NLU Postprocessing
+ * NLU Postprocessing V2.1
  * Normalizes tokens, strips trailing phrases, builds canonical Notes format
+ * Integrates with Notes Validator for v2.1 compliance
  */
+
+const { buildNotesFromSlots, logCoverageReport } = require('../utils/notesValidator');
+const { inferCategory, inferPrep } = require('../utils/categoryMapper');
 
 /**
  * Postprocess parse result
  * @param {Object} parseResult - Raw parse result from rules
+ * @param {string} originalText - Original user input
  * @returns {Object} - Processed result with normalized tokens
  */
-function postprocess(parseResult) {
+function postprocess(parseResult, originalText = '') {
     const { slots } = parseResult;
 
     // Strip trailing meal phrases from sides
@@ -29,9 +34,46 @@ function postprocess(parseResult) {
         slots.bristol = Math.max(1, Math.min(7, parseInt(slots.bristol, 10)));
     }
 
-    // Build Notes tokens array
+    // ========== V2.1: Auto-infer category and prep ==========
+    const metadata = {};
+
+    // Infer category from item
+    if (slots.item && (parseResult.intent === 'food' || parseResult.intent === 'drink')) {
+        const category = inferCategory(slots.item);
+        if (category) {
+            metadata.category = category;
+        }
+    }
+
+    // Infer prep method from original text
+    if (originalText) {
+        const prep = inferPrep(originalText);
+        if (prep) {
+            metadata.prep = prep;
+        }
+    }
+
+    // Add confidence source
+    if (parseResult.decision) {
+        if (parseResult.decision.includes('rescued_llm')) {
+            metadata.confidence = 'merged';
+        } else if (parseResult.decision.includes('llm')) {
+            metadata.confidence = 'llm';
+        } else {
+            metadata.confidence = 'rules';
+        }
+    }
+
+    // ========== V2.1: Build validated canonical Notes ==========
+    const validatedNotes = buildNotesFromSlots(slots, metadata);
+    slots._validatedNotes = validatedNotes;
+
+    // Legacy: also build token array for backward compatibility
     const notesTokens = buildNotesTokens(slots);
     slots._notesTokens = notesTokens;
+
+    // Log coverage periodically
+    logCoverageReport();
 
     return parseResult;
 }

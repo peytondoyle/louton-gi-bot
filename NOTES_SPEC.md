@@ -1,4 +1,4 @@
-# Notes Column Schema Specification
+# Notes Column Schema Specification v2.1
 
 This document describes all structured tokens that can appear in the **Notes** column of GI tracking sheets.
 
@@ -6,9 +6,82 @@ This document describes all structured tokens that can appear in the **Notes** c
 
 The Notes column contains semi-structured metadata extracted from natural language input. Each token follows the format `key=value` or `flag` (for boolean indicators).
 
-## Token Reference
+**Version**: 2.1 (NLU V2 + Structured Tokens)
+**Format**: Canonical ordering enforced by notesValidator.js
+**Separator**: `; ` (semicolon + space)
 
-### 🍽️ Meal & Timing
+## Complete Token Reference (v2.1)
+
+| Key | Type | Values/Format | Example | Description |
+|-----|------|---------------|---------|-------------|
+| `notes_v` | version | `2.1` | `notes_v=2.1` | **Always first** - Schema version |
+| `meal` | enum | breakfast\|lunch\|dinner\|snack\|late | `meal=breakfast` | Meal period |
+| `time` | time | HH:mm:ss | `time=07:45:00` | Absolute time |
+| `time≈` | enum | morning\|midday\|afternoon\|evening\|night\|late | `time≈=morning` | Approximate time |
+| `category` | enum | grain\|protein\|dairy\|non_dairy\|veg\|fruit\|caffeine\|sweet\|fat | `category=grain` | **NEW** Primary food category |
+| `prep` | enum | raw\|baked\|fried\|boiled\|steamed\|roasted\|grilled\|iced\|hot | `prep=grilled` | **NEW** Preparation method |
+| `cuisine` | enum | american\|mexican\|italian\|indian\|japanese\|thai\|chinese\|mediterranean\|other | `cuisine=mexican` | **NEW** Cultural origin |
+| `context` | enum | default\|on_the_go\|social\|post_workout\|late\|travel | `context=on_the_go` | **NEW** Consumption context |
+| `size` | enum | short\|tall\|grande\|venti\|trenta\|small\|medium\|large | `size=grande` | Café size |
+| `portion` | string | User-specified | `portion=2 slices` | Raw portion text |
+| `portion_g` | number | Grams | `portion_g=56` | Normalized grams |
+| `portion_ml` | number | Milliliters | `portion_ml=473` | Normalized milliliters |
+| `brand` | string | Brand name | `brand=Oatly` | Generic brand |
+| `brand_variant` | string | Specific variant | `brand_variant=oatly barista` | Detailed brand |
+| `variant` | string | Variant type | `variant=barista` | Variant classification |
+| `dairy` | flag/enum | dairy\|non_dairy | `dairy=non_dairy` | Dairy classification |
+| `non_dairy` | flag | - | `non_dairy` | Non-dairy flag |
+| `caffeine` | flag | - | `caffeine` | Contains caffeine |
+| `decaf` | flag | - | `decaf` | Decaffeinated |
+| `sides` | string | Comma-separated | `sides=banana & oat milk` | Accompanying items |
+| `sweetener` | string | Description | `sweetener=2 pumps vanilla` | Added sweeteners |
+| `severity` | number | 1-10 | `severity=7` | Symptom severity |
+| `bristol` | number | 1-7 | `bristol=4` | Bristol stool scale |
+| `symptom_type` | string | pain\|reflux\|bloat\|nausea | `symptom_type=reflux` | Symptom classification |
+| `confidence` | enum | rules\|llm\|merged\|manual | `confidence=rules` | **NEW** Parse source |
+| `suspected_trigger` | string | Description | `suspected_trigger=coffee 90min ago` | Linked trigger |
+| `severity_note` | string | Auto-note | `severity_note=auto-detected from adjective` | Metadata |
+| `bristol_note` | string | Auto-note | `bristol_note=auto-detected from loose` | Metadata |
+| `meal_time_note` | string | Auto-note | `meal_time_note=inferred from current time` | Metadata |
+| `deleted` | flag | - | `deleted` | Soft delete |
+| `photo` | url | URL | `photo=https://...` | Single photo |
+| `photo1` | url | URL | `photo1=https://...` | Multiple photos |
+
+---
+
+## V2.1 New Features
+
+### 🏷️ Auto-Classification
+- **category**: Automatically inferred from item (oats→grain, eggs→protein, coffee→caffeine)
+- **prep**: Detected from text keywords (grilled, fried, baked, iced)
+- **confidence**: Tracks parse source (rules, llm, merged)
+
+### ⏰ Enhanced Time Tracking
+- **time≈**: Approximate time buckets for analysis
+- **meal**: Standardized meal periods (5-11=breakfast, 11-15=lunch, etc.)
+
+### 📊 Analysis-Ready
+All new tokens use **controlled vocabularies** for reliable cross-cutting queries.
+
+---
+
+## V2.1 Canonical Order Example
+
+```
+notes_v=2.1; meal=breakfast; time≈=morning; category=protein; non_dairy; portion=1 cup; sides=jasmine tea; confidence=rules
+```
+
+**Key Points**:
+- ✅ Version tag always first
+- ✅ Time/meal before classification
+- ✅ Portions before brands
+- ✅ Flags before sides
+- ✅ Confidence before notes
+- ✅ System flags (deleted, photo) last
+
+---
+
+### 🍽️ Meal & Timing (Original)
 
 | Token | Format | Example | Description |
 |-------|--------|---------|-------------|
