@@ -271,7 +271,7 @@ async function handleNaturalLanguage(message) {
 
     // ========== PENDING UX INTERACTIONS ==========
     // Check if user is responding to a pending UX action (photo, custom portion, custom brand)
-    const uxDeps = { googleSheets, getLogSheetNameForUser };
+    const uxDeps = { googleSheets, getLogSheetNameForUser: googleSheets.getLogSheetNameForUser };
 
     // Handle photo attachments
     if (message.attachments.size > 0) {
