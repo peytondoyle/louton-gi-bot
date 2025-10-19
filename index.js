@@ -16,10 +16,12 @@ const PatternAnalyzer = require('./utils/patternAnalyzer');
 const ClarificationHandler = require('./utils/clarificationHandler');
 const keepAlive = require('./keep_alive');
 
-// NLU System imports
-const { understand, formatParseResult } = require('./src/nlu/understand');
+// NLU System imports - V2 UPGRADE
+const { understand, formatParseResult } = require('./src/nlu/understand-v2');
 const { extractMetadata } = require('./src/nlu/rules');
 const { getWindowStartTime } = require('./src/nlu/ontology');
+const { record: recordNLUMetrics } = require('./src/nlu/metrics-v2');
+const { postprocess } = require('./src/nlu/postprocess');
 
 // UX System imports
 const { EMOJI, PHRASES, getRandomPhrase, BUTTON_IDS } = require('./src/constants/ux');
@@ -290,12 +292,21 @@ async function handleNaturalLanguage(message) {
     }
 
     try {
-        // Parse intent and slots
-        const result = await understand(text, { userId }, contextMemory);
+        // Parse intent and slots with V2
+        const userPrefs = await getUserPrefs(userId, googleSheets);
+        const tz = userPrefs.TZ || TIMEZONE;
 
-        console.log(`🧠 NLU: ${formatParseResult(result)}`);
+        const result = await understand(text, { userId, tz }, contextMemory);
 
-        // Phase 5: Track NLU metrics
+        // Postprocess for token normalization
+        postprocess(result);
+
+        console.log(`🧠 NLU-V2: ${formatParseResult(result)}`);
+
+        // Track V2 metrics
+        recordNLUMetrics(result);
+
+        // Phase 5: Track legacy NLU metrics (keep for compatibility)
         recordNLUParse(result, { fromCache: false, usedLLM: false });
 
         // Auto-enable digests for this user

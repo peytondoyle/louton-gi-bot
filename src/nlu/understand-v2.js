@@ -202,8 +202,20 @@ function resetMetrics() {
     };
 }
 
+/**
+ * Format parse result for logging (backward compatible)
+ */
+function formatParseResult(result) {
+    const secondary = result.slots._secondary ? ` + secondary(${result.slots._secondary.item})` : '';
+    const decision = result.decision ? ` [${result.decision}]` : '';
+    return `Intent: ${result.intent} (${Math.round(result.confidence * 100)}%)${decision}${secondary}, ` +
+           `Slots: ${JSON.stringify(result.slots)}, ` +
+           `Missing: [${result.missing.join(', ')}]`;
+}
+
 module.exports = {
     understand,
+    formatParseResult,
     getMetrics,
     resetMetrics
 };

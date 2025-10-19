@@ -48,6 +48,15 @@ function recordNLUParse(result, { fromCache = false, usedLLM = false } = {}) {
  */
 async function handleNLUStats(message) {
     try {
+        // Get V2 metrics
+        let v2Report = null;
+        try {
+            const { getReport } = require('../nlu/metrics-v2');
+            v2Report = getReport();
+        } catch (e) {
+            // V2 metrics not available
+        }
+
         const cacheStats = getCacheStats();
         const uptime = Date.now() - nluMetrics.lastReset;
         const uptimeHours = (uptime / (1000 * 60 * 60)).toFixed(1);
@@ -95,6 +104,21 @@ async function handleNLUStats(message) {
             embed.addFields({
                 name: '🎯 Intent Breakdown (Top 10)',
                 value: intentBreakdown || 'No data yet',
+                inline: false
+            });
+        }
+
+        // Add V2 metrics if available
+        if (v2Report) {
+            const v2Summary =
+                `**Acceptance**: Strict ${v2Report.acceptance.strict}, Lenient ${v2Report.acceptance.lenient}\n` +
+                `**Rescued**: ${v2Report.rescued.total} (${v2Report.rescued.pct}) - swap:${v2Report.rescued.swap}, beverage:${v2Report.rescued.beverage}, llm:${v2Report.rescued.llm}\n` +
+                `**Clarified**: ${v2Report.clarified} | **Rejected**: ${v2Report.rejected}\n` +
+                `**LLM Rate**: ${v2Report.llm.rate} (target: ${v2Report.llm.target})`;
+
+            embed.addFields({
+                name: '🚀 NLU V2 Coverage',
+                value: v2Summary,
                 inline: false
             });
         }
