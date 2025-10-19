@@ -1,12 +1,14 @@
 // Context Memory: In-memory per-user rolling context tracker
 // Tracks last N entries per user with TTL for empathetic follow-ups
 // Includes lexicon learning and optional JSON persistence
+// V2: Adds "same as yesterday" reference resolution
 
 const { UX } = require('../constants/ux');
 const fs = require('fs');
 const path = require('path');
+const moment = require('moment-timezone');
 
-// In-memory storage: userId -> { entries: [], warnings: Map, lexicon: Map }
+// In-memory storage: userId -> { entries: [], warnings: Map, lexicon: Map, recentLogs: [] }
 const userContexts = new Map();
 
 // Lexicon persistence path (Replit-friendly)
@@ -342,6 +344,66 @@ function loadLexicon() {
 }
 
 // Load lexicon on module initialization
+/**
+ * V2: Resolve references like "same as yesterday"
+ * @param {string} userId - Discord user ID
+ * @param {string} text - Input text
+ * @param {Object} googleSheets - Sheets service
+ * @param {string} sheetName - User's sheet
+ * @returns {Promise<Object|null>} - Referenced entry or null
+ */
+async function resolveReference(userId, text, googleSheets, sheetName) {
+    const lower = text.toLowerCase();
+
+    // Check for reference patterns
+    const patterns = [
+        /same (as |)yesterday/i,
+        /same (as |)last time/i,
+        /usual breakfast/i,
+        /regular lunch/i,
+        /same (thing|meal)/i
+    ];
+
+    const hasReference = patterns.some(p => p.test(text));
+    if (!hasReference) return null;
+
+    try {
+        // Get yesterday's date
+        const yesterday = moment().subtract(1, 'day').format('YYYY-MM-DD');
+
+        // Fetch rows from sheet
+        const result = await googleSheets.getRows({}, sheetName);
+        if (!result.success) return null;
+
+        // Find yesterday's breakfast/lunch/dinner (based on current time)
+        const currentMeal = moment().hour() < 11 ? 'breakfast' :
+                           moment().hour() < 15 ? 'lunch' : 'dinner';
+
+        const yesterdayEntry = result.rows.find(row => {
+            if (row.Date !== yesterday) return false;
+            if (row.Type !== 'food' && row.Type !== 'drink') return false;
+
+            const notes = row.Notes || '';
+            return notes.includes(`meal=${currentMeal}`);
+        });
+
+        if (yesterdayEntry) {
+            console.log(`[CONTEXT] Resolved reference: ${yesterdayEntry.Details} from ${yesterday}`);
+            return {
+                item: yesterdayEntry.Details,
+                notes: yesterdayEntry.Notes,
+                date: yesterday,
+                calories: yesterdayEntry.Calories
+            };
+        }
+
+        return null;
+    } catch (error) {
+        console.error('[CONTEXT] Error resolving reference:', error);
+        return null;
+    }
+}
+
 loadLexicon();
 
 // Run global cleanup every 10 minutes
@@ -360,5 +422,6 @@ module.exports = {
     learnPhrase,
     lookupPhrase,
     isWarningMuted,
-    setWarningMute
+    setWarningMute,
+    resolveReference  // V2: Reference resolution
 };
