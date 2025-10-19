@@ -38,6 +38,8 @@ const { estimateCaloriesForItemAndSides } = require('./src/nutrition/estimateCal
 // Reminders & preferences
 const { getUserPrefs, setUserPrefs } = require('./services/prefs');
 const { scheduleAll, updateUserSchedule } = require('./src/scheduler/reminders');
+const { scheduleContextualFollowups } = require('./src/handlers/contextualFollowups');
+const dndCommands = require('./src/commands/dnd');
 
 // Start keep-alive server for Replit deployment
 keepAlive();
@@ -141,6 +143,7 @@ const commands = {
     '!weekly': handleWeeklySummary,
     '!goal': handleGoal,
     '!reminders': handleReminders,
+    '!dnd': handleDND,
     '!timezone': handleTimezone,
     '!snooze': handleSnooze,
     '!test': handleTest  // Debug test command
@@ -511,6 +514,24 @@ async function logFromNLU(message, parseResult) {
         content: `${emoji} Logged **${rowObj.Details}**.`,
         components: chips
     });
+
+    // ========== PHASE 4: CONTEXTUAL FOLLOW-UPS ==========
+    // Schedule adaptive follow-ups based on what was logged
+    try {
+        const userPrefs = await getUserPrefs(userId, googleSheets);
+        const tz = userPrefs.TZ || TIMEZONE;
+
+        await scheduleContextualFollowups({
+            googleSheets,
+            message,
+            parseResult: { intent, slots },
+            tz,
+            userId,
+            userPrefs
+        });
+    } catch (error) {
+        console.error('[FOLLOWUP] Error scheduling contextual follow-ups:', error);
+    }
 
     // Check for trigger linking (if symptom/reflux)
     if (intent === 'symptom' || intent === 'reflux') {
@@ -1711,8 +1732,20 @@ async function handleReminders(message, args) {
     return message.reply('⚠️ Unknown subcommand. Use `!reminders` for help.');
 }
 
-// Handle timezone command - set user timezone
+// Handle DND, Timezone, Snooze commands (Phase 4)
+async function handleDND(message, args) {
+    await dndCommands.handleDND(message, args, { getUserPrefs, setUserPrefs, googleSheets });
+}
+
 async function handleTimezone(message, args) {
+    await dndCommands.handleTimezone(message, args, { getUserPrefs, setUserPrefs, googleSheets });
+}
+
+async function handleSnooze(message, args) {
+    await dndCommands.handleSnooze(message, args, { getUserPrefs, setUserPrefs, googleSheets });
+}
+
+async function handleSnooze_OLD_LEGACY(message, args) {
     const userId = message.author.id;
     const tz = (args || '').trim();
 

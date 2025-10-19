@@ -14,7 +14,8 @@ const SHEET_NAME = 'Prefs';
 async function ensurePrefsTab(googleSheets) {
     try {
         await googleSheets.ensureSheetAndHeaders(SHEET_NAME, [
-            'UserId', 'DM', 'TZ', 'MorningHHMM', 'EveningHHMM', 'InactivityHHMM', 'SnoozeUntil'
+            'UserId', 'DM', 'TZ', 'MorningHHMM', 'EveningHHMM', 'InactivityHHMM', 'SnoozeUntil',
+            'AdaptiveShiftMin', 'IgnoredCount', 'DNDWindow', 'Cooldowns'
         ]);
         console.log('✅ Prefs tab ensured');
     } catch (error) {
@@ -36,6 +37,15 @@ async function getUserPrefs(userId, googleSheets) {
         const rows = await googleSheets.getRows({}, SHEET_NAME);
         const hit = rows.find(r => String(r.userid || r.UserId || '').trim() === String(userId));
         if (hit) {
+            // Parse cooldowns JSON if present
+            let cooldowns = {};
+            try {
+                const cdStr = hit.cooldowns || hit.Cooldowns || '{}';
+                cooldowns = typeof cdStr === 'string' ? JSON.parse(cdStr) : cdStr;
+            } catch (e) {
+                cooldowns = {};
+            }
+
             // Normalize keys to camelCase
             return {
                 UserId: hit.userid || hit.UserId,
@@ -44,7 +54,11 @@ async function getUserPrefs(userId, googleSheets) {
                 MorningHHMM: hit.morninghhmm || hit.MorningHHMM || '',
                 EveningHHMM: hit.eveninghhmm || hit.EveningHHMM || '',
                 InactivityHHMM: hit.inactivityhhmm || hit.InactivityHHMM || '',
-                SnoozeUntil: hit.snoozeuntil || hit.SnoozeUntil || ''
+                SnoozeUntil: hit.snoozeuntil || hit.SnoozeUntil || '',
+                AdaptiveShiftMin: parseInt(hit.adaptiveshiftmin || hit.AdaptiveShiftMin || '0', 10),
+                IgnoredCount: parseInt(hit.ignoredcount || hit.IgnoredCount || '0', 10),
+                DNDWindow: hit.dndwindow || hit.DNDWindow || '',
+                Cooldowns: cooldowns
             };
         }
     } catch (error) {
@@ -55,13 +69,33 @@ async function getUserPrefs(userId, googleSheets) {
     try {
         if (fs.existsSync(PREFS_PATH)) {
             const raw = JSON.parse(fs.readFileSync(PREFS_PATH, 'utf8'));
-            return raw[userId] || null;
+            const user = raw[userId];
+            if (user) {
+                // Ensure cooldowns is an object
+                if (!user.Cooldowns || typeof user.Cooldowns !== 'object') {
+                    user.Cooldowns = {};
+                }
+                return user;
+            }
         }
     } catch (error) {
         console.error('[PREFS] JSON read failed:', error.message);
     }
 
-    return null;
+    // Return defaults if not found
+    return {
+        UserId: userId,
+        DM: 'off',
+        TZ: 'America/Los_Angeles',
+        MorningHHMM: '',
+        EveningHHMM: '',
+        InactivityHHMM: '',
+        SnoozeUntil: '',
+        AdaptiveShiftMin: 0,
+        IgnoredCount: 0,
+        DNDWindow: '',
+        Cooldowns: {}
+    };
 }
 
 /**
@@ -79,6 +113,15 @@ async function setUserPrefs(userId, partial, googleSheets) {
         // Get current prefs
         const current = await getUserPrefs(userId, googleSheets);
 
+        // Merge cooldowns if provided
+        let cooldowns = current?.Cooldowns || {};
+        if (partial.Cooldowns) {
+            cooldowns = {
+                ...cooldowns,
+                ...partial.Cooldowns
+            };
+        }
+
         // Merge with new values
         const merged = {
             UserId: String(userId),
@@ -87,13 +130,22 @@ async function setUserPrefs(userId, partial, googleSheets) {
             MorningHHMM: partial.MorningHHMM !== undefined ? partial.MorningHHMM : (current?.MorningHHMM || ''),
             EveningHHMM: partial.EveningHHMM !== undefined ? partial.EveningHHMM : (current?.EveningHHMM || ''),
             InactivityHHMM: partial.InactivityHHMM !== undefined ? partial.InactivityHHMM : (current?.InactivityHHMM || ''),
-            SnoozeUntil: partial.SnoozeUntil !== undefined ? partial.SnoozeUntil : (current?.SnoozeUntil || '')
+            SnoozeUntil: partial.SnoozeUntil !== undefined ? partial.SnoozeUntil : (current?.SnoozeUntil || ''),
+            AdaptiveShiftMin: partial.AdaptiveShiftMin !== undefined ? partial.AdaptiveShiftMin : (current?.AdaptiveShiftMin || 0),
+            IgnoredCount: partial.IgnoredCount !== undefined ? partial.IgnoredCount : (current?.IgnoredCount || 0),
+            DNDWindow: partial.DNDWindow !== undefined ? partial.DNDWindow : (current?.DNDWindow || ''),
+            Cooldowns: JSON.stringify(cooldowns)
         };
 
         // Write to Sheets
         await googleSheets.appendRowToSheet(SHEET_NAME, merged);
         console.log(`[PREFS] Updated preferences for user ${userId} in Sheets`);
-        return merged;
+
+        // Return with parsed cooldowns
+        return {
+            ...merged,
+            Cooldowns: cooldowns
+        };
     } catch (error) {
         console.log('[PREFS] Sheets write failed, using JSON fallback:', error.message);
     }
@@ -101,10 +153,16 @@ async function setUserPrefs(userId, partial, googleSheets) {
     // JSON fallback
     try {
         const raw = fs.existsSync(PREFS_PATH) ? JSON.parse(fs.readFileSync(PREFS_PATH, 'utf8')) : {};
+
+        // Merge cooldowns
+        const currentCooldowns = raw[userId]?.Cooldowns || {};
+        const newCooldowns = partial.Cooldowns ? { ...currentCooldowns, ...partial.Cooldowns } : currentCooldowns;
+
         raw[userId] = {
             ...(raw[userId] || {}),
             ...partial,
-            UserId: String(userId)
+            UserId: String(userId),
+            Cooldowns: newCooldowns
         };
 
         // Ensure .data directory exists
@@ -155,10 +213,72 @@ async function listAllPrefs(googleSheets) {
     return [];
 }
 
+/**
+ * Get cooldown expiry for a specific key
+ * @param {string} userId - Discord user ID
+ * @param {string} key - Cooldown key
+ * @param {Object} googleSheets - Google Sheets service
+ * @returns {Promise<string|null>} ISO timestamp or null
+ */
+async function getCooldown(userId, key, googleSheets) {
+    const prefs = await getUserPrefs(userId, googleSheets);
+    return prefs?.Cooldowns?.[key] || null;
+}
+
+/**
+ * Set cooldown expiry for a specific key
+ * @param {string} userId - Discord user ID
+ * @param {string} key - Cooldown key
+ * @param {string} untilISO - ISO timestamp
+ * @param {Object} googleSheets - Google Sheets service
+ */
+async function setCooldown(userId, key, untilISO, googleSheets) {
+    const prefs = await getUserPrefs(userId, googleSheets);
+    const cooldowns = {
+        ...(prefs?.Cooldowns || {}),
+        [key]: untilISO
+    };
+
+    await setUserPrefs(userId, { Cooldowns: cooldowns }, googleSheets);
+}
+
+/**
+ * Check if user is currently snoozed
+ * @param {string} userId - Discord user ID
+ * @param {string} nowISO - Current ISO timestamp
+ * @param {Object} googleSheets - Google Sheets service
+ * @returns {Promise<boolean>} True if snoozed
+ */
+async function isSnoozed(userId, nowISO, googleSheets) {
+    const prefs = await getUserPrefs(userId, googleSheets);
+    if (!prefs?.SnoozeUntil) return false;
+
+    return nowISO < prefs.SnoozeUntil;
+}
+
+/**
+ * Check if a cooldown is active
+ * @param {string} userId - Discord user ID
+ * @param {string} key - Cooldown key
+ * @param {string} nowISO - Current ISO timestamp
+ * @param {Object} googleSheets - Google Sheets service
+ * @returns {Promise<boolean>} True if on cooldown
+ */
+async function isOnCooldown(userId, key, nowISO, googleSheets) {
+    const expiry = await getCooldown(userId, key, googleSheets);
+    if (!expiry) return false;
+
+    return nowISO < expiry;
+}
+
 module.exports = {
     getUserPrefs,
     setUserPrefs,
     listAllPrefs,
     ensurePrefsTab,
+    getCooldown,
+    setCooldown,
+    isSnoozed,
+    isOnCooldown,
     SHEET_NAME
 };
