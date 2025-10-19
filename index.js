@@ -228,8 +228,41 @@ async function handleNaturalLanguage(message) {
         // Auto-enable digests for this user
         digests.autoEnableForUser(userId);
 
-        // If confidence too low or "other" intent, ask for clarification
-        if (result.intent === "other" || result.confidence < 0.5) {
+        // ========== CONVERSATION GUARD ==========
+        // Only log specific intents to Sheets - don't log greetings, thanks, chit-chat
+        const LOGGABLE_INTENTS = ['food', 'drink', 'symptom', 'reflux', 'bm', 'mood', 'checkin'];
+
+        // Handle non-loggable conversational intents
+        if (result.intent === 'greeting') {
+            const greetings = ['Morning! 🌞', 'Hey! 👋', 'Hi there! 👋', 'Hello! 😊'];
+            await message.reply(greetings[Math.floor(Math.random() * greetings.length)] + ' How are you feeling?');
+            return;
+        }
+
+        if (result.intent === 'thanks') {
+            const responses = ['You\'re welcome! 😊', 'Anytime! 👍', 'Happy to help! ✨', 'No problem! 😊'];
+            await message.reply(responses[Math.floor(Math.random() * responses.length)]);
+            return;
+        }
+
+        if (result.intent === 'chit_chat') {
+            const responses = ['👍', '😊', '✨', '👌'];
+            await message.reply(responses[Math.floor(Math.random() * responses.length)]);
+            return;
+        }
+
+        // Confidence threshold: Don't auto-log if confidence < 80%
+        if (LOGGABLE_INTENTS.includes(result.intent) && result.confidence < 0.8) {
+            await message.reply({
+                content: `${EMOJI.thinking} I'm not quite sure what you mean. Try:\n` +
+                        `• "had oats for lunch"\n• "mild heartburn"\n• "bad poop"\n` +
+                        `Or use commands like \`!food\`, \`!symptom\`, etc.`
+            });
+            return;
+        }
+
+        // If intent is not loggable and not conversational, ask for clarification
+        if (!LOGGABLE_INTENTS.includes(result.intent)) {
             await message.reply({
                 content: `${EMOJI.thinking} I'm not quite sure what you mean. Try:\n` +
                         `• "had oats for lunch"\n• "mild heartburn"\n• "bad poop"\n` +

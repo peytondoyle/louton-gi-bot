@@ -54,9 +54,32 @@ function rulesParse(text) {
         }
     }
 
-    // 3. INTENT CLASSIFICATION (priority order: BM > Reflux > Symptom > Drink > Food)
+    // 3. CONVERSATIONAL INTENTS (should not be logged to Sheets)
 
-    // 3a. BM Detection (highest priority)
+    // 3a. Greeting detection
+    if (/^(good\s*morning|good\s*evening|good\s*afternoon|hey|hi|hello|yo|sup|what'?s\s*up)/i.test(t)) {
+        result.intent = "greeting";
+        result.confidence = 0.95;
+        return result;
+    }
+
+    // 3b. Thanks/appreciation detection
+    if (/^(thanks|thank\s*you|ty|thx|appreciate|cheers)/i.test(t)) {
+        result.intent = "thanks";
+        result.confidence = 0.95;
+        return result;
+    }
+
+    // 3c. General chit-chat (short casual responses)
+    if (/^(lol|haha|ok|okay|cool|nice|awesome|great|perfect|got\s*it|sure|yep|yeah|nope|nah)/i.test(t)) {
+        result.intent = "chit_chat";
+        result.confidence = 0.9;
+        return result;
+    }
+
+    // 4. LOGGABLE INTENTS (priority order: BM > Reflux > Symptom > Drink > Food)
+
+    // 4a. BM Detection (highest priority)
     if (containsSynonym(t, INTENT_KEYWORDS.bm)) {
         result.intent = "bm";
         result.confidence = 0.85;
@@ -82,7 +105,7 @@ function rulesParse(text) {
         return result;
     }
 
-    // 3b. Reflux Detection (very specific keywords)
+    // 4b. Reflux Detection (very specific keywords)
     if (containsSynonym(t, SYNONYMS.symptoms.reflux)) {
         result.intent = "reflux";
         result.confidence = 0.9;
@@ -99,7 +122,7 @@ function rulesParse(text) {
         return result;
     }
 
-    // 3c. Symptom Detection (other symptoms)
+    // 4c. Symptom Detection (other symptoms)
     const symptomType = findSynonymGroup(t, SYNONYMS.symptoms);
     if (symptomType && symptomType !== "reflux") {
         result.intent = "symptom";
@@ -135,7 +158,7 @@ function rulesParse(text) {
         return result;
     }
 
-    // 4. ITEM EXTRACTION using head-noun + "with" heuristic (for food/drink)
+    // 5. ITEM EXTRACTION using head-noun + "with" heuristic (for food/drink)
     const extracted = extractItem(t);
     if (extracted.item) {
         result.slots.item = extracted.item;
@@ -144,7 +167,7 @@ function rulesParse(text) {
         result.slots.sides = extracted.sides;
     }
 
-    // 5. DRINK vs FOOD Classification
+    // 6. DRINK vs FOOD Classification
     // Prefer drink if strong drink indicators present
     const drinkType = findSynonymGroup(t, SYNONYMS.drinks);
     const hasDrinkAction = containsSynonym(t, INTENT_KEYWORDS.drink);
@@ -192,7 +215,7 @@ function rulesParse(text) {
         return result;
     }
 
-    // 6. FALLBACK - couldn't determine clear intent
+    // 7. FALLBACK - couldn't determine clear intent
     result.intent = "other";
     result.confidence = 0.3;
     result.missing.push("clarification_needed");
