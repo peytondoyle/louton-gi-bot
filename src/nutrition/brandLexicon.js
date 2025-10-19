@@ -129,7 +129,7 @@ const CEREAL_CALORIES = {
     'special k': 375,
     'cinnamon toast crunch': 420,
     'fruit loops': 390,
-    'cap''n crunch': 400
+    "cap'n crunch": 400
 };
 
 /**
