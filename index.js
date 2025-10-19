@@ -23,6 +23,10 @@ const { getWindowStartTime } = require('./src/nlu/ontology');
 const { record: recordNLUMetrics } = require('./src/nlu/metrics-v2');
 const { postprocess } = require('./src/nlu/postprocess');
 
+// Command Palette System
+const { handleHelpPalette } = require('./src/commands/helpPalette');
+const { CommandRegistry } = require('./src/commands/registry');
+
 // UX System imports
 const { EMOJI, PHRASES, getRandomPhrase, BUTTON_IDS } = require('./src/constants/ux');
 const { buttonsSeverity, buttonsMealTime, buttonsBristol, buttonsSymptomType, trendChip } = require('./src/ui/components');
@@ -142,7 +146,9 @@ const commands = {
     '!bm': handleBM,
     '!reflux': handleReflux,
     '!drink': handleDrink,
-    '!help': handleHelp,
+    '!help': handleHelpPalette,        // Command Palette (interactive)
+    '!palette': handleHelpPalette,     // Alias
+    '!commands': handleHelpPalette,    // Alias
     '!howto': handleHowto,
     '!today': handleToday,
     '!week': handleWeek,
@@ -158,8 +164,8 @@ const commands = {
     '!dnd': handleDND,
     '!timezone': handleTimezone,
     '!snooze': handleSnooze,
-    '!nlu-stats': handleNLUStats,  // Phase 5
-    '!test': handleTest  // Debug test command
+    '!nlu-stats': handleNLUStats,
+    '!test': handleTest
 };
 
 // Add raw event debug listener
@@ -854,7 +860,10 @@ client.on('messageCreate', async (message) => {
             } else {
                 console.log(`[ROUTER] ❌ Unknown command: !${command}`);
                 await message.reply({
-                    content: `😅 Unknown command \`!${command}\`.\n\nAvailable commands: ${Object.keys(commands).join(', ')}\n\nOr just tell me in plain language what you ate or how you're feeling!`
+                    content: `❌ Unknown command \`!${command}\`.\n\n💡 **Try:**\n` +
+                            `• \`!help\` - Open the interactive Command Palette\n` +
+                            `• \`!howto\` - Beginner walkthrough\n` +
+                            `• Or just talk naturally: "had pizza for lunch"`
                 });
             }
             return;
