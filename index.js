@@ -45,6 +45,14 @@ const { markInteracted, isUnderWatch } = require('./src/reminders/responseWatche
 // Start keep-alive server for Replit deployment
 keepAlive();
 
+// ========== Phase 5: Performance & Monitoring ==========
+const { startHeartbeat } = require('./src/health/heartbeat');
+const { handleNLUStats, recordNLUParse } = require('./src/commands/nluStats');
+
+// Start heartbeat monitor
+startHeartbeat();
+// ======================================================
+
 // ========== Clean Messaging System (Phase 7) ==========
 // Monkey-patch message.reply() globally to remove gray reply bar
 const { sendCleanReply } = require('./src/utils/messaging');
@@ -147,6 +155,7 @@ const commands = {
     '!dnd': handleDND,
     '!timezone': handleTimezone,
     '!snooze': handleSnooze,
+    '!nlu-stats': handleNLUStats,  // Phase 5
     '!test': handleTest  // Debug test command
 };
 
@@ -284,6 +293,9 @@ async function handleNaturalLanguage(message) {
         const result = await understand(text, { userId }, contextMemory);
 
         console.log(`🧠 NLU: ${formatParseResult(result)}`);
+
+        // Phase 5: Track NLU metrics
+        recordNLUParse(result, { fromCache: false, usedLLM: false });
 
         // Auto-enable digests for this user
         digests.autoEnableForUser(userId);
