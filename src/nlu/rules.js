@@ -207,17 +207,21 @@ function rulesParse(text) {
  */
 function extractItem(text) {
     try {
+        // 0. Strip meal time phrases (for breakfast, at lunch, etc.) before processing
+        const MEAL_TIME_SUFFIX_RE = /\s+(for|at|during|after|before)\s+(breakfast|lunch|dinner|snack|brunch)\b.*$/i;
+        const cleanedText = text.replace(MEAL_TIME_SUFFIX_RE, '').trim();
+
         // 1. Split on "with" to separate main item from sides
         const WITH_RE = /\bwith\b/i;
         let mainChunk = null;
         let sideChunk = null;
 
-        if (WITH_RE.test(text)) {
-            const parts = text.split(WITH_RE);
+        if (WITH_RE.test(cleanedText)) {
+            const parts = cleanedText.split(WITH_RE);
             mainChunk = (parts[0] || '').trim();
             sideChunk = (parts[1] || '').trim();
         } else {
-            mainChunk = text;
+            mainChunk = cleanedText;
         }
 
         // 2. Brand-aware cereal capture (Brand + cereal) or ProperNoun + cereal
@@ -266,16 +270,16 @@ function extractItem(text) {
         let chosen = null;
 
         // 4. Priority 1: If "cereal" appears, try brand capture first
-        const cerealItem = captureCereal(mainChunk || text);
+        const cerealItem = captureCereal(mainChunk || cleanedText);
         if (cerealItem) chosen = cerealItem;
 
-        // 5. Priority 2: Use head-noun picker on mainChunk, then full text
+        // 5. Priority 2: Use head-noun picker on mainChunk, then cleaned text
         if (!chosen) chosen = chooseItemFromHeadNoun(mainChunk);
-        if (!chosen) chosen = chooseItemFromHeadNoun(text);
+        if (!chosen) chosen = chooseItemFromHeadNoun(cleanedText);
 
         // 6. Fallback: Use compromise noun-phrase extractor
         if (!chosen) {
-            const doc = compromise(mainChunk || text);
+            const doc = compromise(mainChunk || cleanedText);
             const nouns = doc.nouns().out('array');
 
             if (nouns.length > 0) {

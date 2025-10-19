@@ -33,7 +33,14 @@ function needsPinch(result) {
         (result.missing || []).includes(slot)
     );
 
-    // Call LLM if confidence < 0.75 OR missing critical slots
+    // Call LLM only if: (low confidence AND missing critical) OR intent unknown
+    // Don't waste time on LLM for decent food/drink intents with all slots
+    if (result.intent === 'food' || result.intent === 'drink') {
+        // For food/drink: only call LLM if missing critical item or very uncertain
+        return result.confidence < 0.6 || hasMissingCritical;
+    }
+
+    // For other intents: call LLM if confidence < 0.75 OR missing critical slots
     return result.confidence < 0.75 || hasMissingCritical;
 }
 
