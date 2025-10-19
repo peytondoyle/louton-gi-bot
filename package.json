@@ -19,9 +19,8 @@
   "author": "",
   "license": "MIT",
   "dependencies": {
+    "axios": "^1.6.0",
     "better-sqlite3": "^9.2.2",
-    "chart.js": "^3.9.1",
-    "chartjs-node-canvas": "^4.1.6",
     "chrono-node": "^2.9.0",
     "compromise": "^14.14.4",
     "discord.js": "^14.14.1",

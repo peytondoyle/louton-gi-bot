@@ -1,10 +1,10 @@
 /**
  * Chart Rendering Service
- * Server-side PNG generation using Chart.js + chartjs-node-canvas
- * Retina-ready (2x scale) with premium styling
+ * Server-side PNG generation using QuickChart API (zero native dependencies)
+ * Retina-ready with premium styling
  */
 
-const { ChartJSNodeCanvas } = require('chartjs-node-canvas');
+const axios = require('axios');
 
 // Chart dimensions (2x for retina)
 const WIDTH = 1200;
@@ -33,34 +33,10 @@ const FONTS = {
     value: { size: 13, weight: 'normal', family: 'sans-serif' }
 };
 
-/**
- * Initialize Chart.js renderer
- */
-function createRenderer() {
-    try {
-        const renderer = new ChartJSNodeCanvas({
-            width: WIDTH,
-            height: HEIGHT,
-            backgroundColour: PALETTE.background,
-            chartCallback: (ChartJS) => {
-                // Register plugins if needed
-                // ChartJS.register(...);
-            },
-            plugins: {
-                modern: []
-            }
-        });
+// QuickChart API endpoint (free tier, no auth needed)
+const QUICKCHART_URL = 'https://quickchart.io/chart';
 
-        console.log('[CHARTS] ✅ ChartService initialized (1200x700, retina 2x)');
-        return renderer;
-    } catch (error) {
-        console.error('[CHARTS] ❌ Failed to initialize renderer:', error);
-        return null;
-    }
-}
-
-// Singleton renderer
-const renderer = createRenderer();
+console.log('[CHARTS] ✅ ChartService initialized (QuickChart API, 1200x700)');
 
 /**
  * Common chart options (theme)
@@ -139,15 +115,11 @@ function applyCommonOptions(baseOptions = {}, overrides = {}) {
 }
 
 /**
- * Render chart to PNG buffer
+ * Render chart to PNG buffer using QuickChart API
  * @param {Object} config - { type, data, options }
  * @returns {Promise<Buffer>} - PNG buffer
  */
 async function renderToBuffer(config) {
-    if (!renderer) {
-        throw new Error('Chart renderer not initialized');
-    }
-
     const startTime = Date.now();
 
     try {
@@ -158,7 +130,26 @@ async function renderToBuffer(config) {
             options: applyCommonOptions(config.options || {})
         };
 
-        const buffer = await renderer.renderToBuffer(enhancedConfig);
+        // Build QuickChart request
+        const quickChartConfig = {
+            width: WIDTH,
+            height: HEIGHT,
+            devicePixelRatio: 2, // Retina
+            backgroundColor: PALETTE.background,
+            format: 'png',
+            chart: enhancedConfig
+        };
+
+        // Call QuickChart API
+        const response = await axios.post(QUICKCHART_URL, quickChartConfig, {
+            responseType: 'arraybuffer',
+            timeout: 10000, // 10s timeout
+            headers: {
+                'Content-Type': 'application/json'
+            }
+        });
+
+        const buffer = Buffer.from(response.data);
 
         const renderTime = Date.now() - startTime;
         console.log(`[CHARTS] ✅ Rendered ${config.type} in ${renderTime}ms (${(buffer.length / 1024).toFixed(0)}KB)`);
