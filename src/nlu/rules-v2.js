@@ -32,6 +32,8 @@ const {
     DECAF_FLAGS,
     ADJECTIVE_SEVERITY,
     BM_KEYWORDS,
+    BM_DESCRIPTORS,
+    BRISTOL_ADJ,
     BM_BRISTOL_MAP,
     SYMPTOM_CANONICAL,
     NEGATION_PATTERNS,
@@ -46,7 +48,7 @@ const {
     isMinimalCoreFood
 } = require('./ontology-v2');
 
-const { correctTokens } = require('../utils/spell');
+const { safeCorrectToken, correctTokens } = require('../utils/spell');
 const { parseTimeInfo } = require('../utils/timeParse');
 const { extractPortion } = require('../nutrition/portionParser');
 
@@ -147,24 +149,41 @@ function rulesParse(text, options = {}) {
 
     // ========== 4. LOGGABLE INTENTS (Priority Order) ==========
 
-    // 4a. BM Detection
-    if (containsSynonym(cleanedLower, INTENT_KEYWORDS.bm)) {
-        result.intent = "bm";
-        result.confidence = 0.85;
+    // 4a. BM Detection (STRENGTHENED - checks tokens for BM keywords)
+    const tokens = cleanedLower.split(/\s+/);
+    const hasBMKeyword = tokens.some(t => BM_KEYWORDS.has(t));
 
-        // Auto-classify Bristol scale
-        for (const [type, keywords] of Object.entries(BM_KEYWORDS)) {
-            if (containsSynonym(cleanedLower, keywords)) {
-                const bristol = BM_BRISTOL_MAP[type];
-                if (bristol) {
-                    result.slots.bristol = String(bristol);
-                    result.slots.bristol_note = `auto-detected from ${type}`;
-                }
+    if (hasBMKeyword) {
+        result.intent = "bm";
+        result.confidence = 0.90; // High confidence when BM keyword present
+
+        // Auto-classify Bristol using BRISTOL_ADJ
+        let bristolDetected = false;
+        for (const token of tokens) {
+            if (BRISTOL_ADJ[token]) {
+                result.slots.bristol = String(BRISTOL_ADJ[token]);
+                result.slots.bristol_note = `auto-detected from ${token}`;
+                bristolDetected = true;
                 break;
             }
         }
 
-        if (!result.slots.bristol) {
+        // Check descriptors if no adjective match
+        if (!bristolDetected) {
+            for (const [type, keywords] of Object.entries(BM_DESCRIPTORS)) {
+                if (containsSynonym(cleanedLower, keywords)) {
+                    const bristol = BM_BRISTOL_MAP[type];
+                    if (bristol) {
+                        result.slots.bristol = String(bristol);
+                        result.slots.bristol_note = `auto-detected from ${type}`;
+                        bristolDetected = true;
+                    }
+                    break;
+                }
+            }
+        }
+
+        if (!bristolDetected) {
             result.missing.push("bristol");
         }
 

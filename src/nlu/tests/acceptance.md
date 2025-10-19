@@ -334,6 +334,46 @@ for (const test of testCases) {
 
 ---
 
+## 🔥 Critical Regression Tests (Hotfix Validation)
+
+### Test 33: BM + Adjective + Daypart (Louis's Case)
+**Input**: `"Pretty hard poop this morning"`
+**Expected**:
+- Intent: `bm`
+- Bristol: 2 (from "hard" via BRISTOL_ADJ)
+- Time approx: `morning` (NOT time=23:00:00)
+- Meal: `breakfast`
+- Notes: `notes_v=2.1; meal=breakfast; time≈=morning; bristol=2; bristol_note=auto-detected from hard; confidence=rules`
+- **CRITICAL**: No spell correction ("poop" stays "poop", not corrected to "pop")
+
+### Test 34: Spell Safety - Protected BM Words
+**Input**: `"poop"`
+**Expected**:
+- Intent: `bm`
+- No spell correction applied
+- **CRITICAL**: NOT corrected to "pop"
+- Blocked by: `SPELL_DENY` and `BM_PROTECTED`
+
+### Test 35: Legitimate "Pop" (Soda)
+**Input**: `"had a pop with lunch"`
+**Expected**:
+- Intent: `drink`
+- Item: `pop` (soda)
+- Meal: `lunch`
+- **CRITICAL**: Spell guard must NOT block legitimate "pop" when not BM context
+
+### Test 36: Daypart Window (No Exact Time)
+**Input**: `"oatmeal this morning"`
+**Expected**:
+- Intent: `food`
+- Item: `oatmeal`
+- Time approx: `morning`
+- Meal: `breakfast`
+- Notes: `time≈=morning` (NOT `time=07:00:00` or `time=23:00:00`)
+- **CRITICAL**: Dayparts are approximate, not exact times
+
+---
+
 ## ✅ Coverage Goals
 
 - ✅ Egg constructions (Tests 1-2)

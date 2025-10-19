@@ -268,19 +268,43 @@ const ADJECTIVE_SEVERITY = {
 };
 
 // ========== BM DESCRIPTORS ==========
-const BM_KEYWORDS = {
+const BM_KEYWORDS = new Set([
+    'poop', 'poops', 'pooping', 'pooped',
+    'bm', 'stool', 'stools',
+    'bowel', 'bowels', 'bowel movement',
+    'bathroom', 'toilet',
+    'diarrhea', 'constipation', 'constipated'
+]);
+
+const BM_DESCRIPTORS = {
     loose: ["diarrhea", "loose", "watery", "runny", "liquid", "urgent", "explosive"],
     hard: ["hard", "constipated", "pellets", "pebbles", "rocky", "dry", "difficult", "painful"],
     normal: ["normal", "good", "healthy", "regular", "fine", "solid", "formed"]
 };
 
-// Bristol scale mappings
+// Bristol scale mappings (adjective → Bristol number)
+const BRISTOL_ADJ = {
+    loose: 6,
+    watery: 7,
+    diarrhea: 7,
+    liquid: 7,
+    hard: 2,
+    pellet: 1,
+    pellets: 1,
+    pebbles: 1,
+    constipated: 2,
+    constipation: 2,
+    normal: 4,
+    formed: 4
+};
+
+// Legacy format for backward compatibility
 const BM_BRISTOL_MAP = {
-    loose: 6,      // Type 6: Mushy
-    watery: 7,     // Type 7: Liquid
-    hard: 2,       // Type 2: Lumpy
-    pellets: 1,    // Type 1: Separate hard lumps
-    normal: 4      // Type 4: Smooth snake
+    loose: 6,
+    watery: 7,
+    hard: 2,
+    pellets: 1,
+    normal: 4
 };
 
 // ========== SYMPTOM TYPE CANONICALIZATION ==========
@@ -427,6 +451,8 @@ module.exports = {
     DECAF_FLAGS,
     ADJECTIVE_SEVERITY,
     BM_KEYWORDS,
+    BM_DESCRIPTORS,
+    BRISTOL_ADJ,
     BM_BRISTOL_MAP,
     SYMPTOM_CANONICAL,
     NEGATION_PATTERNS,

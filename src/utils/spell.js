@@ -1,7 +1,23 @@
 /**
  * Lightweight Spell Correction & Fuzzy Matching
  * Uses Jaro-Winkler distance for near-miss corrections
+ * V2: Domain-aware to prevent BM → food/drink false corrections
  */
+
+// Protected BM vocabulary (NEVER spell-correct these)
+const BM_PROTECTED = new Set([
+    'poop', 'poops', 'pooping', 'pooped',
+    'bm', 'stool', 'stools',
+    'bowel', 'bowels', 'bowel-movement',
+    'constipation', 'constipated',
+    'diarrhea', 'diarrhoea',
+    'loose', 'watery',
+    'hard', 'pellet', 'pellets', 'pebbles',
+    'bristol', 'toilet', 'bathroom'
+]);
+
+// Global deny list (never correct these words)
+const SPELL_DENY = new Set(['poop', 'poops', 'bm', 'stool', 'poo']);
 
 /**
  * Calculate Jaro-Winkler distance between two strings
@@ -140,9 +156,59 @@ function areSimilar(s1, s2, threshold = 0.90) {
     return jaroWinkler(s1, s2) >= threshold;
 }
 
+/**
+ * Safe spell correction with domain awareness
+ * Prevents BM words from being corrected to food/drink
+ * @param {string} token - Word to potentially correct
+ * @param {Object} context - { vocab, candidateDomains, activeDomain, domainIndex }
+ * @returns {string} - Original or corrected token
+ */
+function safeCorrectToken(token, context = {}) {
+    const raw = (token || '').toLowerCase().trim();
+    if (!raw || raw.length < 3) return token;
+
+    // 1. Hard deny list
+    if (SPELL_DENY.has(raw)) {
+        return token; // Never correct
+    }
+
+    // 2. BM-protected vocabulary
+    if (BM_PROTECTED.has(raw)) {
+        return token; // Never correct BM words
+    }
+
+    // 3. Try to find correction
+    const { vocab = [], candidateDomains = [], activeDomain = null } = context;
+    const correction = findClosestMatch(raw, vocab, 0.88);
+
+    if (!correction || correction.toLowerCase() === raw) {
+        return token; // No correction needed
+    }
+
+    // 4. Domain safety gate
+    // If we're in symptomatic domain (bm/symptom) and correction would flip to food/drink
+    const symptomatic = candidateDomains.includes('bm') || candidateDomains.includes('symptom');
+
+    if (symptomatic) {
+        // Only allow corrections with very high confidence (>0.94)
+        const score = jaroWinkler(raw, correction.toLowerCase());
+        if (score < 0.94) {
+            console.log(`[SPELL] Blocked domain-flip correction: "${raw}" → "${correction}" (score: ${score.toFixed(2)}, in BM/symptom domain)`);
+            return token; // Keep original
+        }
+    }
+
+    console.log(`[SPELL] Corrected: "${raw}" → "${correction}"`);
+    return correction;
+}
+
 module.exports = {
     jaroWinkler,
     findClosestMatch,
     correctTokens,
-    areSimilar
+    areSimilar,
+    safeCorrectToken,  // V2: Domain-aware correction
+    BM_PROTECTED,
+    SPELL_DENY
 };
+

@@ -27,15 +27,16 @@ function parseAbsolute(text, tz = 'America/Los_Angeles') {
 }
 
 /**
- * Parse relative time phrases
+ * Parse relative time phrases (dayparts)
  * @param {string} text - Input text (e.g., "this morning", "earlier", "tonight")
  * @param {string} tz - Timezone
  * @returns {Object|null} - { approx: "morning", meal_time: "breakfast" } or null
+ * NOTE: Returns approx only, NOT exact time (fixes "this morning" → 23:00 bug)
  */
 function parseRelative(text, tz = 'America/Los_Angeles') {
     const lower = text.toLowerCase();
 
-    // Map relative phrases to meal windows
+    // Map relative phrases to approximate time buckets
     const relativeMap = {
         'this morning': { approx: 'morning', meal_time: 'breakfast' },
         'earlier': { approx: 'earlier', meal_time: null },
@@ -50,8 +51,11 @@ function parseRelative(text, tz = 'America/Los_Angeles') {
     for (const [phrase, result] of Object.entries(relativeMap)) {
         if (lower.includes(phrase)) {
             return {
-                ...result,
-                source: 'relative'
+                approx: result.approx,
+                meal_time: result.meal_time,
+                source: 'relative',
+                // Do NOT include exact time - it's approximate only
+                isApproximate: true
             };
         }
     }
