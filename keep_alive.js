@@ -4,6 +4,9 @@ const googleSheets = require('./services/googleSheets');
 
 const server = express();
 
+// Feature flag for health data ingestion
+const HEALTH_INGEST_ENABLED = String(process.env.HEALTH_INGEST_ENABLED || 'false') === 'true';
+
 // Health check endpoint for UptimeRobot
 server.all('/', (req, res) => {
     res.send(`
@@ -65,9 +68,21 @@ server.get('/health', (req, res) => {
     });
 });
 
+// Lightweight status endpoint for uptime pings
+server.get('/status', (req, res) => {
+    res.status(200).json({
+        ok: true,
+        service: 'Louton GI Bot',
+        features: {
+            health_ingest: HEALTH_INGEST_ENABLED
+        }
+    });
+});
+
 // ========== HEALTH DATA INGESTION ENDPOINT ==========
 // Receives Apple Health data from iOS Shortcuts via webhook
 // Verifies HMAC-SHA256 signature for security (timing-safe)
+// Feature flag: HEALTH_INGEST_ENABLED (default: false)
 
 /**
  * POST /ingest/health
@@ -88,6 +103,11 @@ server.get('/health', (req, res) => {
  * Security: Uses crypto.timingSafeEqual to prevent timing attacks
  */
 server.post('/ingest/health', express.text({ type: '*/*' }), async (req, res) => {
+    // Feature flag check
+    if (!HEALTH_INGEST_ENABLED) {
+        console.log('📥 [HEALTH] Ingest request received but feature is disabled');
+        return res.status(503).json({ ok: false, error: 'Health ingest disabled' });
+    }
     const rawBody = req.body; // raw string
     const signature = req.get('X-Signature');
     const secret = process.env.HEALTH_SIGNING_SECRET;
@@ -170,7 +190,7 @@ function keepAlive() {
     server.listen(3000, () => {
         console.log('✅ Keep-alive server is ready on port 3000');
         console.log('🔗 Server URL: http://localhost:3000');
-        console.log('📥 Health ingestion endpoint: POST /ingest/health');
+        console.log(`📥 Health ingestion: ${HEALTH_INGEST_ENABLED ? '✅ Enabled' : '⚠️ Disabled'}`);
     });
 }
 

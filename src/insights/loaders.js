@@ -6,6 +6,9 @@
 const moment = require('moment-timezone');
 const { hasDeleted } = require('../utils/notes');
 
+// Feature flag for health data (Apple Health integration)
+const HEALTH_ENABLED = String(process.env.HEALTH_INGEST_ENABLED || 'false') === 'true';
+
 // In-memory cache with TTL (5 minutes)
 const cache = new Map();
 const CACHE_TTL_MS = 5 * 60 * 1000;
@@ -85,6 +88,12 @@ async function loadUserRows(googleSheets, userName, sheetName, { sinceDays = 30 
  * @returns {Promise<Map>} - Map keyed by Date
  */
 async function loadHealthRows(googleSheets, { sinceDays = 30 } = {}) {
+    // Feature flag check - return empty if health disabled
+    if (!HEALTH_ENABLED) {
+        console.log(`[INSIGHTS] Health integration disabled (no burn data available)`);
+        return new Map();
+    }
+
     const cacheKey = `health:${sinceDays}`;
 
     // Check cache
