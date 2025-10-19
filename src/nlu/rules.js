@@ -293,6 +293,14 @@ function extractItem(text) {
         }
 
         // 7. Return item + sides
+        // If we have both item and sides, include the full phrase for readability
+        if (chosen && sideChunk) {
+            return {
+                item: `${chosen} with ${sideChunk}`,
+                sides: sideChunk
+            };
+        }
+
         return {
             item: chosen,
             sides: sideChunk

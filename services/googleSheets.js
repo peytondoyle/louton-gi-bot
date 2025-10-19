@@ -10,6 +10,9 @@ class GoogleSheetsService {
         this.insightsSheetName = 'Insights';
         this.initialized = false;
 
+        // Cache for sheet headers (sheetName -> headers array)
+        this.headerCache = new Map();
+
         // Define the complete column schema
         this.columnSchema = [
             'Timestamp',
@@ -657,6 +660,262 @@ class GoogleSheetsService {
             console.error('Error clearing sheet:', error);
             throw error;
         }
+    }
+
+    /**
+     * Ensure sheet exists and has the required headers
+     * Creates missing columns at the end if needed
+     * @param {string} sheetName - Name of the sheet
+     * @param {Array<string>} headersArray - Required headers
+     */
+    async ensureSheetAndHeaders(sheetName, headersArray) {
+        if (!this.initialized) await this.initialize();
+
+        try {
+            // Check if sheet exists
+            const response = await this.sheets.spreadsheets.get({
+                spreadsheetId: this.spreadsheetId
+            });
+
+            const sheetExists = response.data.sheets.some(
+                sheet => sheet.properties.title === sheetName
+            );
+
+            if (!sheetExists) {
+                // Create the sheet
+                await this.sheets.spreadsheets.batchUpdate({
+                    spreadsheetId: this.spreadsheetId,
+                    resource: {
+                        requests: [{
+                            addSheet: {
+                                properties: {
+                                    title: sheetName,
+                                    gridProperties: {
+                                        rowCount: 10000,
+                                        columnCount: headersArray.length
+                                    }
+                                }
+                            }
+                        }]
+                    }
+                });
+                console.log(`✅ Created new sheet: ${sheetName}`);
+            }
+
+            // Check if headers exist and add missing columns
+            const lastCol = String.fromCharCode(65 + headersArray.length - 1);
+            const headerRange = `${sheetName}!A1:${lastCol}1`;
+            const headerResponse = await this.sheets.spreadsheets.values.get({
+                spreadsheetId: this.spreadsheetId,
+                range: headerRange
+            });
+
+            const existingHeaders = headerResponse.data.values ? headerResponse.data.values[0] : [];
+
+            // Determine if we need to add headers
+            if (existingHeaders.length === 0) {
+                // No headers - add them
+                await this.sheets.spreadsheets.values.update({
+                    spreadsheetId: this.spreadsheetId,
+                    range: headerRange,
+                    valueInputOption: 'RAW',
+                    resource: { values: [headersArray] }
+                });
+                console.log(`✅ Headers added to ${sheetName}: ${headersArray.join(', ')}`);
+
+                // Format headers (bold and frozen)
+                const sheetId = await this.getSheetIdByName(sheetName);
+                await this.sheets.spreadsheets.batchUpdate({
+                    spreadsheetId: this.spreadsheetId,
+                    resource: {
+                        requests: [
+                            {
+                                repeatCell: {
+                                    range: {
+                                        sheetId: sheetId,
+                                        startRowIndex: 0,
+                                        endRowIndex: 1
+                                    },
+                                    cell: {
+                                        userEnteredFormat: {
+                                            textFormat: { bold: true },
+                                            backgroundColor: { red: 0.9, green: 0.9, blue: 0.9 }
+                                        }
+                                    },
+                                    fields: 'userEnteredFormat(textFormat,backgroundColor)'
+                                }
+                            },
+                            {
+                                updateSheetProperties: {
+                                    properties: {
+                                        sheetId: sheetId,
+                                        gridProperties: { frozenRowCount: 1 }
+                                    },
+                                    fields: 'gridProperties.frozenRowCount'
+                                }
+                            }
+                        ]
+                    }
+                });
+            } else {
+                // Headers exist - check for missing columns
+                const missingHeaders = headersArray.filter(h => !existingHeaders.includes(h));
+
+                if (missingHeaders.length > 0) {
+                    // Add missing headers at the end
+                    const newHeaders = [...existingHeaders, ...missingHeaders];
+                    const newLastCol = String.fromCharCode(65 + newHeaders.length - 1);
+
+                    await this.sheets.spreadsheets.values.update({
+                        spreadsheetId: this.spreadsheetId,
+                        range: `${sheetName}!A1:${newLastCol}1`,
+                        valueInputOption: 'RAW',
+                        resource: { values: [newHeaders] }
+                    });
+                    console.log(`✅ Added missing columns to ${sheetName}: ${missingHeaders.join(', ')}`);
+                }
+            }
+
+            // Cache the headers
+            this.headerCache.set(sheetName, headersArray);
+
+        } catch (error) {
+            console.error(`Error ensuring sheet ${sheetName}:`, error);
+            throw error;
+        }
+    }
+
+    /**
+     * Get sheet ID by name
+     * @param {string} sheetName - Name of the sheet
+     * @returns {Promise<number>} Sheet ID
+     */
+    async getSheetIdByName(sheetName) {
+        const response = await this.sheets.spreadsheets.get({
+            spreadsheetId: this.spreadsheetId
+        });
+
+        const sheet = response.data.sheets.find(
+            s => s.properties.title === sheetName
+        );
+
+        return sheet ? sheet.properties.sheetId : null;
+    }
+
+    /**
+     * Get headers for a specific sheet
+     * @param {string} sheetName - Name of the sheet
+     * @returns {Promise<Array<string>>} Headers array
+     */
+    async getHeadersFor(sheetName) {
+        if (this.headerCache.has(sheetName)) {
+            return this.headerCache.get(sheetName);
+        }
+
+        try {
+            const response = await this.sheets.spreadsheets.values.get({
+                spreadsheetId: this.spreadsheetId,
+                range: `${sheetName}!1:1`
+            });
+
+            const headers = response.data.values ? response.data.values[0] : [];
+            this.headerCache.set(sheetName, headers);
+            return headers;
+        } catch (error) {
+            console.error(`Error getting headers for ${sheetName}:`, error);
+            return [];
+        }
+    }
+
+    /**
+     * Append row with soft column detection
+     * @param {string} sheetName - Target sheet name
+     * @param {Object} rowObject - Row data as object
+     * @returns {Promise<Object>} Result object
+     */
+    async appendRowToSheet(sheetName, rowObject) {
+        if (!this.initialized) await this.initialize();
+
+        try {
+            // Get headers for this sheet
+            const headers = await this.getHeadersFor(sheetName);
+
+            if (headers.length === 0) {
+                throw new Error(`No headers found for sheet ${sheetName}`);
+            }
+
+            // Build row values according to headers
+            const values = [];
+            const unknownKeys = [];
+
+            for (const header of headers) {
+                if (rowObject[header] !== undefined) {
+                    values.push(rowObject[header]);
+                } else {
+                    values.push('');
+                }
+            }
+
+            // Handle unknown keys - append to Notes as tokens
+            for (const key of Object.keys(rowObject)) {
+                if (!headers.includes(key)) {
+                    unknownKeys.push(`${key}=${rowObject[key]}`);
+                }
+            }
+
+            // If there are unknown keys, append to Notes
+            if (unknownKeys.length > 0) {
+                const notesIndex = headers.indexOf('Notes');
+                if (notesIndex >= 0) {
+                    const existingNotes = values[notesIndex] || '';
+                    const newNotes = existingNotes
+                        ? `${existingNotes}; ${unknownKeys.join('; ')}`
+                        : unknownKeys.join('; ');
+                    values[notesIndex] = newNotes;
+                }
+            }
+
+            const lastCol = String.fromCharCode(65 + headers.length - 1);
+            const response = await this.sheets.spreadsheets.values.append({
+                spreadsheetId: this.spreadsheetId,
+                range: `${sheetName}!A:${lastCol}`,
+                valueInputOption: 'RAW',
+                insertDataOption: 'INSERT_ROWS',
+                resource: { values: [values] }
+            });
+
+            // Store row number for undo functionality
+            const rowNumber = response.data.updates.updatedRange.match(/\d+$/)[0];
+            this.lastEntryRow = rowNumber;
+
+            console.log(`✅ Logged to Sheets (${sheetName}): ${rowObject.Type || 'unknown'} for ${rowObject.User || 'unknown'}`);
+            return { success: true, data: response.data, rowNumber };
+        } catch (error) {
+            console.error(`❌ Error appending row to ${sheetName}:`, error.message);
+
+            return {
+                success: false,
+                error: {
+                    message: error.message,
+                    code: error.code || 'UNKNOWN',
+                    userMessage: 'I had trouble saving that entry. Please try again.'
+                }
+            };
+        }
+    }
+
+    /**
+     * Get log sheet name for user ID
+     * @param {string} userId - Discord user ID
+     * @returns {string} Sheet name
+     */
+    getLogSheetNameForUser(userId) {
+        const PEYTON_ID = process.env.PEYTON_ID || "552563833814646806";
+        const LOUIS_ID = process.env.LOUIS_ID || "552563833814646807";
+
+        if (userId === PEYTON_ID) return "Peyton";
+        if (userId === LOUIS_ID) return "Louis";
+        return "General"; // fallback
     }
 }
 

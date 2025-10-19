@@ -28,6 +28,9 @@ const contextMemory = require('./src/utils/contextMemory');
 const digests = require('./src/scheduler/digests');
 const buttonHandlers = require('./src/handlers/buttonHandlers');
 
+// Calorie estimation
+const { estimateCaloriesForItemAndSides } = require('./src/nutrition/estimateCalories');
+
 // Start keep-alive server for Replit deployment
 keepAlive();
 
@@ -54,6 +57,13 @@ const USER1_NAME = process.env.USER1_NAME || 'User1';
 const USER2_NAME = process.env.USER2_NAME || 'User2';
 const TIMEZONE = process.env.TIMEZONE || 'America/Los_Angeles';
 const ENABLE_REMINDERS = process.env.ENABLE_REMINDERS === 'true';
+
+// User IDs for multi-user support
+const PEYTON_ID = process.env.PEYTON_ID || "552563833814646806";
+const LOUIS_ID = process.env.LOUIS_ID || "552563833814646807";
+
+// Per-user daily calorie goals (in-memory storage)
+const userGoals = new Map();
 
 // Trigger foods and drinks to track
 const TRIGGER_ITEMS = {
@@ -107,6 +117,7 @@ const commands = {
     '!triggers': handleTriggers,
     '!trends': handleTrends,
     '!weekly': handleWeeklySummary,
+    '!goal': handleGoal,
     '!test': handleTest  // Debug test command
 };
 
@@ -134,6 +145,19 @@ client.once('ready', async () => {
     try {
         await googleSheets.initialize();
         console.log('✅ Connected to Google Sheets');
+
+        // Ensure tabs exist for multi-user support
+        console.log('🔧 Ensuring user tabs exist...');
+        await googleSheets.ensureSheetAndHeaders('Peyton', [
+            'Timestamp', 'User', 'Type', 'Details', 'Severity', 'Notes', 'Date', 'Source', 'Calories'
+        ]);
+        await googleSheets.ensureSheetAndHeaders('Louis', [
+            'Timestamp', 'User', 'Type', 'Details', 'Severity', 'Notes', 'Date', 'Source', 'Calories'
+        ]);
+        await googleSheets.ensureSheetAndHeaders('Health_Peyton', [
+            'Date', 'Active_kcal', 'Basal_kcal', 'Total_kcal', 'Steps', 'Exercise_min', 'Weight', 'Source'
+        ]);
+        console.log('✅ User tabs ensured: Peyton, Louis, Health_Peyton');
     } catch (error) {
         console.error('❌ Failed to connect to Google Sheets:', error.message);
         console.log('The bot will continue but data logging will fail.');
@@ -216,6 +240,7 @@ async function logFromNLU(message, parseResult) {
     const { intent, slots } = parseResult;
     const userId = message.author.id;
     const userTag = message.author.tag;
+    const isPeyton = (userId === PEYTON_ID);
 
     // Extract metadata
     const metadata = extractMetadata(message.content);
@@ -233,51 +258,52 @@ async function logFromNLU(message, parseResult) {
         notes.push(`time=${new Date(slots.time).toLocaleTimeString()}`);
     }
 
-    // Add quantity/brand/sides
+    // Add quantity/brand
     if (metadata.quantity) notes.push(`qty=${metadata.quantity}`);
     if (metadata.brand) notes.push(`brand=${metadata.brand}`);
+
+    // Sides are already in slots from extractItem
     if (slots.sides) notes.push(`sides=${slots.sides}`);
 
     // Add severity note if auto-detected
     if (slots.severity_note) notes.push(slots.severity_note);
     if (slots.bristol_note) notes.push(slots.bristol_note);
 
-    // Build entry for Google Sheets
-    const entry = {
-        user: userTag,
-        type: intent,
-        value: null,
-        details: null,
-        severity: null,
-        notes: googleSheets.appendNotes(notes),
-        source: 'discord-dm-nlu'
+    // Estimate calories for Peyton only
+    let caloriesVal = null;
+    if (intent === 'food' && isPeyton) {
+        try {
+            caloriesVal = await estimateCaloriesForItemAndSides(slots.item, slots.sides);
+            if (caloriesVal == null) {
+                notes.push('calories=pending');
+            }
+        } catch (error) {
+            console.error('[CAL] Error estimating calories:', error);
+            notes.push('calories=pending');
+        }
+    } else if (intent === 'food' && !isPeyton) {
+        // Louis: explicitly no calorie tracking
+        notes.push('calories=disabled');
+    }
+
+    // Build row object for new appendRowToSheet method
+    const rowObj = {
+        'Timestamp': new Date().toISOString(),
+        'User': userTag,
+        'Type': intent,
+        'Details': slots.item || (intent === 'symptom' ? slots.symptom_type : (intent === 'reflux' ? 'reflux' : (intent === 'bm' ? (slots.bristol ? `Bristol ${slots.bristol}` : 'BM') : ''))),
+        'Severity': (intent === 'symptom' || intent === 'reflux') ? (slots.severity ? mapSeverityToLabel(slots.severity) : '') : '',
+        'Notes': googleSheets.appendNotes(notes),
+        'Date': new Date().toISOString().slice(0, 10),
+        'Source': 'discord-dm-nlu',
+        'Calories': (caloriesVal != null && caloriesVal > 0) ? caloriesVal : ''
     };
 
-    // Fill type-specific fields
-    if (intent === 'food' || intent === 'drink') {
-        entry.value = slots.item;
-        entry.details = slots.item;
-    } else if (intent === 'symptom') {
-        entry.value = slots.symptom_type;
-        entry.details = slots.symptom_type;
-        entry.severity = slots.severity ? mapSeverityToLabel(slots.severity) : null;
-    } else if (intent === 'reflux') {
-        entry.value = 'reflux';
-        entry.details = 'reflux';
-        entry.severity = slots.severity ? mapSeverityToLabel(slots.severity) : null;
-    } else if (intent === 'bm') {
-        entry.value = slots.bristol ? `Bristol ${slots.bristol}` : 'BM';
-        entry.details = entry.value;
-        entry.bristolScale = slots.bristol;
-    }
+    // Get the correct sheet for this user
+    const sheetName = googleSheets.getLogSheetNameForUser(userId);
 
-    // Add meal time to entry if present
-    if (slots.meal_time) {
-        entry.mealType = slots.meal_time;
-    }
-
-    // Log to Sheets
-    const result = await googleSheets.appendRow(entry);
+    // Log to Sheets using new method
+    const result = await googleSheets.appendRowToSheet(sheetName, rowObj);
 
     if (!result.success) {
         await message.reply(`${EMOJI.error} ${result.error.userMessage}`);
@@ -287,26 +313,43 @@ async function logFromNLU(message, parseResult) {
     // Add to context memory
     contextMemory.push(userId, {
         type: intent,
-        details: entry.value,
-        severity: entry.severity,
+        details: rowObj.Details,
+        severity: rowObj.Severity,
         timestamp: Date.now()
     });
 
-    // Success response
-    const successMsg = getRandomPhrase(PHRASES.success);
+    // UI polish: Success response with calories for Peyton
+    if (intent === 'food' || intent === 'drink') {
+        if (isPeyton && caloriesVal != null && caloriesVal > 0) {
+            const goal = userGoals.get(userId);
+            if (goal) {
+                // TODO: Calculate today's total intake for "remaining" display
+                // For now, just show the item calories
+                await message.reply(`✅ Logged **${rowObj.Details}** — ≈${caloriesVal} kcal.`);
+            } else {
+                await message.reply(`✅ Logged **${rowObj.Details}** — ≈${caloriesVal} kcal.`);
+            }
+        } else if (isPeyton && caloriesVal == null) {
+            await message.reply(`✅ Logged **${rowObj.Details}** (calories pending).`);
+        } else {
+            // Louis or other users
+            await message.reply(`✅ Logged **${rowObj.Details}**.`);
+        }
+
+        // Check for trigger warning
+        await checkTriggerWarning(message, userId, rowObj.Details);
+        return;
+    }
+
+    // For symptoms/reflux/bm - standard response
     const emoji = getTypeEmoji(intent);
-    await message.reply(`${emoji} Logged **${entry.value}**.\n\n${successMsg}`);
+    await message.reply(`${emoji} Logged **${rowObj.Details}**.`);
 
     // Check for trigger linking (if symptom/reflux)
     if (intent === 'symptom' || intent === 'reflux') {
         await offerTriggerLink(message, userId);
         await checkRoughPatch(message, userId);
         await surfaceTrendChip(message, userTag);
-    }
-
-    // Check for trigger warning (if food/drink)
-    if (intent === 'food' || intent === 'drink') {
-        await checkTriggerWarning(message, userId, entry.value);
     }
 }
 
@@ -1235,6 +1278,38 @@ async function handleWeeklySummary(message) {
         console.error('Error generating weekly summary:', error);
         await message.reply('❌ Failed to generate weekly summary. Please try again.');
     }
+}
+
+// Handle goal command - set daily calorie goal (Peyton only)
+async function handleGoal(message, args) {
+    const userId = message.author.id;
+
+    // Only Peyton can set goals
+    if (userId !== PEYTON_ID) {
+        return message.reply('Goal tracking is only enabled for Peyton.');
+    }
+
+    // If no args, show current goal
+    if (!args || args.trim() === '') {
+        const currentGoal = userGoals.get(userId);
+        if (currentGoal) {
+            return message.reply(`📊 Your current daily goal is **${currentGoal} kcal**.\n\nUse \`!goal <number>\` to change it.`);
+        } else {
+            return message.reply(`📊 No daily goal set yet.\n\nUse \`!goal <number>\` to set one (e.g., \`!goal 2200\`).`);
+        }
+    }
+
+    // Parse the goal value
+    const val = parseInt(args.trim(), 10);
+
+    if (!Number.isFinite(val) || val < 1000 || val > 5000) {
+        return message.reply('Please provide a daily kcal goal between 1000 and 5000.');
+    }
+
+    // Set the goal
+    userGoals.set(userId, val);
+
+    return message.reply(`✅ Set your daily goal to **${val} kcal**.`);
 }
 
 function setupReminders() {

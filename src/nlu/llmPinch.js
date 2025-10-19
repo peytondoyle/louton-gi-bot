@@ -81,7 +81,8 @@ async function llmPinch(text) {
                 { role: 'system', content: SYSTEM_PROMPT },
                 { role: 'user', content: text }
             ],
-            response_format: { type: 'json_object' },  // Force JSON
+            response_format: { type: 'json_object' }  // Force JSON
+        }, {
             signal: controller.signal
         });
 
