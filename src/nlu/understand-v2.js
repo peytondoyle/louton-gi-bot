@@ -34,8 +34,13 @@ async function understand(text, options = {}, contextMemory = null) {
 
     const tz = options.tz || 'America/Los_Angeles';
 
-    // Run rules-based parser
+    // Run rules-based parser V2
     const rulesResult = rulesParse(text, { tz });
+
+    // Verify V2 is active
+    if (metrics.total === 1) {
+        console.log('[NLU-V2] ✅ understand-v2.js loaded and active');
+    }
 
     console.log(`[NLU-V2] Rules parse: intent=${rulesResult.intent}, conf=${rulesResult.confidence.toFixed(2)}, hasHeadNoun=${rulesResult.meta.hasHeadNoun}`);
 

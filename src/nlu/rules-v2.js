@@ -84,7 +84,46 @@ function rulesParse(text, options = {}) {
         }
     };
 
-    // ========== 1. PRE-CLEAN ==========
+    // ========== 0. BM EARLY ROUTE (BEFORE SPELL CORRECTION) ==========
+    // Check for BM keywords FIRST to prevent spell-correction disasters
+    const tokens = t.split(/\s+/);
+    const hasBMKeyword = tokens.some(tok => BM_KEYWORDS.has(tok));
+
+    if (hasBMKeyword) {
+        console.log('[NLU-V2] 🚨 BM EARLY ROUTE ACTIVATED');
+        result.intent = "bm";
+        result.confidence = 0.90;
+
+        // Detect Bristol from adjectives
+        for (const token of tokens) {
+            if (BRISTOL_ADJ[token]) {
+                result.slots.bristol = String(BRISTOL_ADJ[token]);
+                result.slots.bristol_note = `auto-detected from ${token}`;
+                console.log(`[NLU-V2] Bristol auto-detected: ${token} → ${result.slots.bristol}`);
+                break;
+            }
+        }
+
+        // Parse daypart (no exact time)
+        if (/\bmorning\b/i.test(t)) {
+            result.slots.time_approx = 'morning';
+            result.slots.meal_time = 'breakfast';
+        } else if (/\bafternoon\b/i.test(t)) {
+            result.slots.time_approx = 'afternoon';
+            result.slots.meal_time = 'lunch';
+        } else if (/\bevening|tonight\b/i.test(t)) {
+            result.slots.time_approx = 'evening';
+            result.slots.meal_time = 'dinner';
+        }
+
+        if (!result.slots.bristol) {
+            result.missing.push("bristol");
+        }
+
+        return result; // Exit early - skip spell correction
+    }
+
+    // ========== 1. PRE-CLEAN (Only for non-BM domains) ==========
     // Spell correction for known brands/foods
     const spellingResult = correctTokens(originalText, {
         brands: CEREAL_BRANDS,
