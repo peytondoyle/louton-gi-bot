@@ -4,9 +4,6 @@ const googleSheets = require('./services/googleSheets');
 
 const server = express();
 
-// Middleware to parse raw body as text (required for HMAC verification)
-server.use(express.text({ type: '*/*' }));
-
 // Health check endpoint for UptimeRobot
 server.all('/', (req, res) => {
     res.send(`
@@ -70,25 +67,7 @@ server.get('/health', (req, res) => {
 
 // ========== HEALTH DATA INGESTION ENDPOINT ==========
 // Receives Apple Health data from iOS Shortcuts via webhook
-// Verifies HMAC-SHA256 signature for security
-
-/**
- * Verify HMAC-SHA256 signature
- * @param {string} rawBody - Raw request body
- * @param {string} signature - X-Signature header value
- * @param {string} secret - Signing secret from env
- * @returns {boolean} - True if signature matches
- */
-function verifyHmac(rawBody, signature, secret) {
-    if (!signature || !secret) return false;
-
-    const expectedMac = crypto
-        .createHmac('sha256', secret)
-        .update(rawBody)
-        .digest('hex');
-
-    return expectedMac === signature;
-}
+// Verifies HMAC-SHA256 signature for security (timing-safe)
 
 /**
  * POST /ingest/health
@@ -105,103 +84,83 @@ function verifyHmac(rawBody, signature, secret) {
  *
  * Headers required:
  * - X-Signature: HMAC-SHA256 hex signature of raw body
+ *
+ * Security: Uses crypto.timingSafeEqual to prevent timing attacks
  */
-server.post('/ingest/health', async (req, res) => {
-    console.log('📥 [HEALTH] Received ingest request');
-
-    // Get signature and secret
+server.post('/ingest/health', express.text({ type: '*/*' }), async (req, res) => {
+    const rawBody = req.body; // raw string
     const signature = req.get('X-Signature');
     const secret = process.env.HEALTH_SIGNING_SECRET;
-    const rawBody = req.body;
 
-    // Verify signature
-    if (!verifyHmac(rawBody, signature, secret)) {
+    // HMAC verify (with timing-safe compare to prevent timing attacks)
+    const expected = crypto.createHmac('sha256', secret).update(rawBody).digest('hex');
+    const ok = signature && secret &&
+        crypto.timingSafeEqual(Buffer.from(expected), Buffer.from(signature)).valueOf?.() !== false;
+
+    if (!ok) {
         console.log('❌ [HEALTH] Invalid signature - request rejected');
-        return res.status(401).json({
-            ok: false,
-            error: 'Invalid signature'
-        });
+        return res.status(401).json({ ok: false, error: 'Invalid signature' });
     }
 
     // Parse payload
     let payload;
     try {
         payload = JSON.parse(rawBody);
-    } catch (error) {
+    } catch {
         console.log('❌ [HEALTH] Invalid JSON payload');
-        return res.status(400).json({
-            ok: false,
-            error: 'Invalid JSON'
-        });
+        return res.status(400).json({ ok: false, error: 'Invalid JSON' });
     }
 
-    // Extract fields
-    const { date, total_kcal, active_kcal, basal_kcal, steps, exercise_min, weight, source } = payload;
-
-    // Validate required fields
+    // Extract and validate fields
+    const { date, total_kcal, active_kcal, basal_kcal, steps } = payload;
     if (!date || total_kcal === undefined) {
         console.log('❌ [HEALTH] Missing required fields (date, total_kcal)');
-        return res.status(400).json({
-            ok: false,
-            error: 'Missing required fields'
-        });
+        return res.status(400).json({ ok: false, error: 'Missing required fields' });
     }
 
     // Log received data
-    console.log(`✅ [HEALTH] Received data for ${date}:`);
-    console.log(`   Total: ${total_kcal} kcal`);
-    console.log(`   Active: ${active_kcal || 'N/A'} kcal`);
-    console.log(`   Basal: ${basal_kcal || 'N/A'} kcal`);
-    console.log(`   Steps: ${steps || 'N/A'}`);
+    console.log(`📥 [HEALTH] Verified data for ${date}: ${total_kcal} kcal, ${steps ?? 'N/A'} steps`);
 
     try {
-        // Build row object
-        const rowObj = {
-            'Date': date,
-            'Active_kcal': active_kcal || '',
-            'Basal_kcal': basal_kcal || '',
-            'Total_kcal': total_kcal || '',
-            'Steps': steps || '',
-            'Exercise_min': exercise_min || '',
-            'Weight': weight || '',
-            'Source': source || 'api'
-        };
-
-        // Ensure sheet exists
+        // Ensure Sheets initialized
         if (!googleSheets.initialized) {
             await googleSheets.initialize();
         }
 
-        // Write to Health_Peyton tab only
-        const result = await googleSheets.appendRowToSheet('Health_Peyton', rowObj);
-
-        if (result.success) {
-            console.log(`✅ [HEALTH] Data logged to Health_Peyton: ${date}`);
-
-            // Success response
-            return res.json({
-                ok: true,
-                date: date,
-                received: {
-                    total_kcal,
-                    active_kcal: active_kcal || null,
-                    basal_kcal: basal_kcal || null,
-                    steps: steps || null
-                }
-            });
-        } else {
-            console.error('❌ [HEALTH] Failed to log data:', result.error);
-            return res.status(500).json({
-                ok: false,
-                error: 'Failed to write to Sheets'
-            });
-        }
-    } catch (error) {
-        console.error('❌ [HEALTH] Error processing data:', error);
-        return res.status(500).json({
-            ok: false,
-            error: error.message
+        // Write to Health_Peyton tab
+        await googleSheets.appendRowToSheet('Health_Peyton', {
+            Date: date,
+            Total_kcal: total_kcal,
+            Active_kcal: active_kcal ?? '',
+            Basal_kcal: basal_kcal ?? '',
+            Steps: steps ?? '',
+            Source: 'shortcut'
         });
+
+        console.log(`✅ [HEALTH] Logged to Health_Peyton: ${date}`);
+
+        // Invalidate cache (Phase 5 integration)
+        try {
+            const { invalidate } = require('./services/sheetsCache');
+            invalidate('Health_Peyton:');
+            invalidate('health:');
+        } catch (e) {
+            // Cache not available, ignore
+        }
+
+        return res.json({
+            ok: true,
+            date,
+            received: {
+                total_kcal,
+                active_kcal: active_kcal ?? null,
+                basal_kcal: basal_kcal ?? null,
+                steps: steps ?? null
+            }
+        });
+    } catch (err) {
+        console.error('❌ [HEALTH] Sheet append failed:', err);
+        return res.status(500).json({ ok: false, error: 'Sheets write failed' });
     }
 });
 
