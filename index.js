@@ -24,9 +24,11 @@ const { getWindowStartTime } = require('./src/nlu/ontology');
 // UX System imports
 const { EMOJI, PHRASES, getRandomPhrase, BUTTON_IDS } = require('./src/constants/ux');
 const { buttonsSeverity, buttonsMealTime, buttonsBristol, buttonsSymptomType, trendChip } = require('./src/ui/components');
+const { buildPostLogChips } = require('./src/ui/chips');
 const contextMemory = require('./src/utils/contextMemory');
 const digests = require('./src/scheduler/digests');
 const buttonHandlers = require('./src/handlers/buttonHandlers');
+const uxButtons = require('./src/handlers/uxButtons');
 const { isDuplicate } = require('./src/utils/dedupe');
 const { validateQuality } = require('./src/utils/qualityCheck');
 
@@ -207,6 +209,18 @@ client.once('ready', async () => {
 client.on('interactionCreate', async (interaction) => {
     if (!interaction.isButton()) return;
 
+    // Route UX buttons (Phase 2)
+    if (interaction.customId.startsWith('ux:')) {
+        const uxDeps = {
+            googleSheets,
+            sendCleanReply,
+            getLogSheetNameForUser: googleSheets.getLogSheetNameForUser
+        };
+        await uxButtons.handleUxButton(interaction, uxDeps);
+        return;
+    }
+
+    // Route to existing button handlers (severity, mealTime, etc.)
     await buttonHandlers.handleButtonInteraction(interaction, googleSheets, digests);
 });
 
@@ -232,6 +246,20 @@ async function handleNaturalLanguage(message) {
         console.log(`[ROUTER] ⏭️  Skipping duplicate message from ${userTag}: "${text}"`);
         return;
     }
+
+    // ========== PENDING UX INTERACTIONS ==========
+    // Check if user is responding to a pending UX action (photo, custom portion, custom brand)
+    const uxDeps = { googleSheets, getLogSheetNameForUser };
+
+    // Handle photo attachments
+    if (message.attachments.size > 0) {
+        const handled = await uxButtons.handlePhotoMessage(message, uxDeps);
+        if (handled) return;
+    }
+
+    // Handle custom text input for portion/brand
+    const customHandled = await uxButtons.handleCustomInput(message, uxDeps);
+    if (customHandled) return;
 
     // Check for correction syntax first
     if (text.toLowerCase().startsWith('correction:') || text.startsWith('*')) {
@@ -440,6 +468,10 @@ async function logFromNLU(message, parseResult) {
         return;
     }
 
+    // Build undo reference (format: sheetName:rowIndex)
+    const rowIndex = result.rowIndex || (await googleSheets.getRows(sheetName)).rows.length + 1;
+    const undoId = `${sheetName}:${rowIndex}`;
+
     // Add to context memory
     contextMemory.push(userId, {
         type: intent,
@@ -448,32 +480,37 @@ async function logFromNLU(message, parseResult) {
         timestamp: Date.now()
     });
 
+    // ========== PHASE 2: POST-LOG CHIPS ==========
+    // Show quick-action chips after successful log
+    const chips = buildPostLogChips({ undoId, intent });
+
     // UI polish: Success response with calories for Peyton
     if (intent === 'food' || intent === 'drink') {
+        let confirmText = '';
         if (isPeyton && caloriesVal != null && caloriesVal > 0) {
-            const goal = userGoals.get(userId);
-            if (goal) {
-                // TODO: Calculate today's total intake for "remaining" display
-                // For now, just show the item calories
-                await message.reply(`✅ Logged **${rowObj.Details}** — ≈${caloriesVal} kcal.`);
-            } else {
-                await message.reply(`✅ Logged **${rowObj.Details}** — ≈${caloriesVal} kcal.`);
-            }
+            confirmText = `✅ Logged **${rowObj.Details}** — ≈${caloriesVal} kcal.`;
         } else if (isPeyton && caloriesVal == null) {
-            await message.reply(`✅ Logged **${rowObj.Details}** (calories pending).`);
+            confirmText = `✅ Logged **${rowObj.Details}** (calories pending).`;
         } else {
-            // Louis or other users
-            await message.reply(`✅ Logged **${rowObj.Details}**.`);
+            confirmText = `✅ Logged **${rowObj.Details}**.`;
         }
+
+        await message.reply({
+            content: confirmText,
+            components: chips
+        });
 
         // Check for trigger warning
         await checkTriggerWarning(message, userId, rowObj.Details);
         return;
     }
 
-    // For symptoms/reflux/bm - standard response
+    // For symptoms/reflux/bm - standard response with chips
     const emoji = getTypeEmoji(intent);
-    await message.reply(`${emoji} Logged **${rowObj.Details}**.`);
+    await message.reply({
+        content: `${emoji} Logged **${rowObj.Details}**.`,
+        components: chips
+    });
 
     // Check for trigger linking (if symptom/reflux)
     if (intent === 'symptom' || intent === 'reflux') {
@@ -975,44 +1012,149 @@ async function handleToday(message) {
     const userId = message.author.id;
     const userName = getUserName(message.author.username);
     const sheetName = googleSheets.getLogSheetNameForUser(userId);
+    const isPeyton = (userId === PEYTON_ID);
 
-    const todayData = await googleSheets.getTodayEntries(userName, sheetName);
+    try {
+        // Fetch today's entries
+        const result = await googleSheets.getRows(sheetName);
+        if (!result.success) {
+            return message.reply('❌ Failed to fetch today\'s data.');
+        }
 
-    if (!todayData || todayData.length === 0) {
-        return message.reply('No entries found for today. Start tracking with `!food`, `!symptom`, or other commands!');
-    }
-
-    const embed = new EmbedBuilder()
-        .setColor(0x00FF00)
-        .setTitle(`📊 Today's Summary for ${userName}`)
-        .setDescription(`Here's what you've tracked today (${moment().tz(TIMEZONE).format('MMM DD, YYYY')}):`)
-        .setTimestamp();
-
-    // Group entries by type
-    const grouped = {};
-    todayData.forEach(entry => {
-        if (!grouped[entry.type]) grouped[entry.type] = [];
-        grouped[entry.type].push(entry);
-    });
-
-    // Add fields for each type
-    Object.keys(grouped).forEach(type => {
-        const entries = grouped[type];
-        const value = entries.map(e => {
-            const time = moment(e.timestamp).format('HH:mm');
-            const severity = e.severity ? ` (${e.severity})` : '';
-            const details = e.details || e.value;
-            return `• ${time} - ${details}${severity}`;
-        }).join('\n');
-
-        embed.addFields({
-            name: `${type.charAt(0).toUpperCase() + type.slice(1)} (${entries.length})`,
-            value: value || 'None',
-            inline: false
+        const today = moment().tz(TIMEZONE).format('YYYY-MM-DD');
+        const todayEntries = result.rows.filter(row => {
+            return row.Date === today && !row.Notes?.includes('deleted=true');
         });
-    });
 
-    await message.reply({ embeds: [embed] });
+        if (todayEntries.length === 0) {
+            return message.reply('No entries found for today. Start tracking with `!food`, `!symptom`, or other commands!');
+        }
+
+        // Calculate intake (food + drink calories)
+        let totalIntake = 0;
+        todayEntries.forEach(row => {
+            if ((row.Type === 'food' || row.Type === 'drink') && row.Calories) {
+                const cal = parseInt(row.Calories, 10);
+                if (!isNaN(cal)) totalIntake += cal;
+            }
+        });
+
+        // Calculate reflux stats
+        const refluxEntries = todayEntries.filter(row => row.Type === 'reflux');
+        const refluxCount = refluxEntries.length;
+        let avgRefluxSeverity = 0;
+        if (refluxCount > 0) {
+            const severities = refluxEntries.map(row => {
+                const sev = row.Severity || row.Notes?.match(/severity=(\d+)/)?.[1];
+                return sev ? parseInt(sev, 10) : 5;
+            }).filter(s => !isNaN(s));
+            avgRefluxSeverity = severities.length > 0
+                ? (severities.reduce((a, b) => a + b, 0) / severities.length).toFixed(1)
+                : 0;
+        }
+
+        // Fetch Health_Peyton data for net calories (Peyton only)
+        let netCalories = null;
+        let burnCalories = null;
+        if (isPeyton) {
+            try {
+                const healthResult = await googleSheets.getRows('Health_Peyton');
+                if (healthResult.success) {
+                    const todayHealth = healthResult.rows.find(row => row.Date === today);
+                    if (todayHealth && todayHealth.Total_kcal) {
+                        burnCalories = parseInt(todayHealth.Total_kcal, 10);
+                        if (!isNaN(burnCalories)) {
+                            netCalories = totalIntake - burnCalories;
+                        }
+                    }
+                }
+            } catch (err) {
+                console.log('[TODAY] Health_Peyton not available:', err.message);
+            }
+        }
+
+        // Calculate 7-day reflux trend
+        const sevenDaysAgo = moment().tz(TIMEZONE).subtract(7, 'days').format('YYYY-MM-DD');
+        const last7Days = result.rows.filter(row => {
+            return row.Date >= sevenDaysAgo && row.Date < today && !row.Notes?.includes('deleted=true');
+        });
+
+        const refluxLast7 = last7Days.filter(row => row.Type === 'reflux').length;
+        const avgLast7 = refluxLast7 / 7;
+        const avgToday = refluxCount; // Today's count
+
+        let trendText = '—';
+        let trendColor = 0x808080; // Gray
+        if (avgLast7 > 0) {
+            const change = ((avgToday - avgLast7) / avgLast7) * 100;
+            if (change <= -15) {
+                trendText = '📉 Improving';
+                trendColor = 0x00FF00; // Green
+            } else if (change >= 15) {
+                trendText = '📈 Worsening';
+                trendColor = 0xFF0000; // Red
+            } else {
+                trendText = '➡️ Stable';
+                trendColor = 0xFFA500; // Orange
+            }
+        }
+
+        // Build compact embed
+        const embed = new EmbedBuilder()
+            .setColor(trendColor)
+            .setTitle(`📊 Today's Summary`)
+            .setDescription(`${moment().tz(TIMEZONE).format('dddd, MMM DD')}`)
+            .setTimestamp();
+
+        // Line 1: Intake
+        let fields = [];
+        if (isPeyton && totalIntake > 0) {
+            fields.push({
+                name: '🍽 Intake',
+                value: `${totalIntake} kcal`,
+                inline: true
+            });
+        }
+
+        // Line 2: Reflux
+        if (refluxCount > 0) {
+            fields.push({
+                name: '🔥 Reflux',
+                value: `${refluxCount} event${refluxCount > 1 ? 's' : ''} • avg ${avgRefluxSeverity}`,
+                inline: true
+            });
+        } else {
+            fields.push({
+                name: '🔥 Reflux',
+                value: 'None today',
+                inline: true
+            });
+        }
+
+        // Line 3: Net (if available)
+        if (netCalories !== null) {
+            const sign = netCalories >= 0 ? '+' : '';
+            fields.push({
+                name: '⚖️ Net',
+                value: `${totalIntake} - ${burnCalories} = ${sign}${netCalories}`,
+                inline: false
+            });
+        }
+
+        // Line 4: Trend
+        fields.push({
+            name: '📈 7-Day Trend',
+            value: trendText,
+            inline: true
+        });
+
+        embed.addFields(...fields);
+
+        await message.reply({ embeds: [embed] });
+    } catch (error) {
+        console.error('[TODAY] Error:', error);
+        await message.reply('❌ Failed to generate today\'s summary.');
+    }
 }
 
 async function handleWeek(message) {
