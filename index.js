@@ -1440,43 +1440,15 @@ async function handleClarifiedMessage(message, clarificationResult) {
 
 // Handle insights command - show pattern insights
 async function handleInsights(message) {
-    const userId = message.author.id;
-    const userName = getUserName(message.author.username);
-    const sheetName = googleSheets.getLogSheetNameForUser(userId);
+    // Phase 3: Use new insights module
+    const { handleInsights: insightsCommand } = require('./src/commands/insights');
 
-    try {
-        const entries = await googleSheets.getAllEntries(userName, sheetName);
-
-        if (entries.length < 10) {
-            return message.reply('📊 You need at least 10 entries for meaningful insights. Keep tracking!');
-        }
-
-        const recommendations = await PatternAnalyzer.getRecommendations(entries, userName);
-        const trends = await PatternAnalyzer.calculateTrends(entries, userName);
-
-        const embed = new EmbedBuilder()
-            .setColor(0x9B59B6)
-            .setTitle('🔮 Your Personalized Insights')
-            .setDescription(trends.message)
-            .setTimestamp();
-
-        if (recommendations.length > 0) {
-            recommendations.forEach(rec => {
-                const emoji = rec.type === 'avoid' ? '⚠️' :
-                             rec.type === 'positive' ? '🌟' : 'ℹ️';
-                embed.addFields({
-                    name: `${emoji} ${rec.priority.toUpperCase()} Priority`,
-                    value: rec.message,
-                    inline: false
-                });
-            });
-        }
-
-        await message.reply({ embeds: [embed] });
-    } catch (error) {
-        console.error('Error generating insights:', error);
-        await message.reply('❌ Failed to generate insights. Please try again.');
-    }
+    await insightsCommand(message, {
+        googleSheets,
+        getUserName,
+        getLogSheetNameForUser: googleSheets.getLogSheetNameForUser,
+        PEYTON_ID
+    });
 }
 
 // Handle triggers command - show trigger correlations
