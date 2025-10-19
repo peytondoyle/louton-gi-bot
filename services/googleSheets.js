@@ -729,7 +729,7 @@ class GoogleSheetsService {
                 });
                 console.log(`✅ Headers added to ${sheetName}: ${headersArray.join(', ')}`);
 
-                // Format headers (bold and frozen)
+                // Format headers (bold and frozen) and clear data row formatting
                 const sheetId = await this.getSheetIdByName(sheetName);
                 await this.sheets.spreadsheets.batchUpdate({
                     spreadsheetId: this.spreadsheetId,
@@ -749,6 +749,21 @@ class GoogleSheetsService {
                                         }
                                     },
                                     fields: 'userEnteredFormat(textFormat,backgroundColor)'
+                                }
+                            },
+                            {
+                                repeatCell: {
+                                    range: {
+                                        sheetId: sheetId,
+                                        startRowIndex: 1,
+                                        endRowIndex: 10000
+                                    },
+                                    cell: {
+                                        userEnteredFormat: {
+                                            backgroundColor: { red: 1, green: 1, blue: 1 }
+                                        }
+                                    },
+                                    fields: 'userEnteredFormat(backgroundColor)'
                                 }
                             },
                             {
