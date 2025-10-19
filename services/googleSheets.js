@@ -318,34 +318,39 @@ class GoogleSheetsService {
         }
     }
 
-    async getRows(filter = {}) {
+    async getRows(filter = {}, sheetName = null) {
         if (!this.initialized) await this.initialize();
 
         try {
-            const lastCol = String.fromCharCode(65 + this.columnSchema.length - 1);
+            // Use provided sheetName or fall back to default
+            const targetSheet = sheetName || this.sheetName;
+
+            // Get headers for this sheet to know how many columns to read
+            const headers = await this.getHeadersFor(targetSheet);
+            const lastCol = String.fromCharCode(65 + headers.length - 1);
+
             const response = await this.sheets.spreadsheets.values.get({
                 spreadsheetId: this.spreadsheetId,
-                range: `${this.sheetName}!A2:${lastCol}` // Skip header row, get all columns
+                range: `${targetSheet}!A2:${lastCol}` // Skip header row, get all columns
             });
 
             if (!response.data.values) return [];
 
-            // Convert rows to objects based on schema
-            const rows = response.data.values.map(row => ({
-                timestamp: row[0] || '',
-                user: row[1] || '',
-                type: row[2] || '',
-                value: row[3] || '',
-                severity: row[4] || '',
-                category: row[5] || '',
-                mealType: row[6] || '',
-                confidence: row[7] || '',
-                followUpNeeded: row[8] || '',
-                bristolScale: row[9] || '',
-                notes: row[10] || '',
-                date: row[11] || '',
-                source: row[12] || 'DM'
-            }));
+            // Convert rows to objects based on headers dynamically
+            const rows = response.data.values.map(row => {
+                const obj = {};
+                headers.forEach((header, index) => {
+                    // Normalize header names to camelCase for backwards compatibility
+                    let key = header;
+                    if (header === 'Meal_Type') key = 'mealType';
+                    else if (header === 'Follow_Up_Needed') key = 'followUpNeeded';
+                    else if (header === 'Bristol_Scale') key = 'bristolScale';
+                    else key = header.toLowerCase();
+
+                    obj[key] = row[index] || '';
+                });
+                return obj;
+            });
 
             // Apply filters
             let filteredRows = rows;
@@ -379,7 +384,7 @@ class GoogleSheetsService {
         }
     }
 
-    async getTodayEntries(userName = null) {
+    async getTodayEntries(userName = null, sheetName = null) {
         const today = moment().tz(process.env.TIMEZONE || 'America/Los_Angeles').startOf('day');
         const filter = {
             date: today.format('YYYY-MM-DD')
@@ -387,10 +392,10 @@ class GoogleSheetsService {
 
         if (userName) filter.user = userName;
 
-        return this.getRows(filter);
+        return this.getRows(filter, sheetName);
     }
 
-    async getWeekEntries(userName = null) {
+    async getWeekEntries(userName = null, sheetName = null) {
         const weekStart = moment().tz(process.env.TIMEZONE || 'America/Los_Angeles').startOf('week');
         const weekEnd = moment().tz(process.env.TIMEZONE || 'America/Los_Angeles').endOf('week');
 
@@ -401,16 +406,16 @@ class GoogleSheetsService {
 
         if (userName) filter.user = userName;
 
-        return this.getRows(filter);
+        return this.getRows(filter, sheetName);
     }
 
-    async getAllEntries(userName = null) {
+    async getAllEntries(userName = null, sheetName = null) {
         const filter = {};
         if (userName) filter.user = userName;
-        return this.getRows(filter);
+        return this.getRows(filter, sheetName);
     }
 
-    async getEntriesDateRange(startDate, endDate, userName = null) {
+    async getEntriesDateRange(startDate, endDate, userName = null, sheetName = null) {
         const filter = {
             startDate: moment(startDate),
             endDate: moment(endDate)
@@ -418,16 +423,16 @@ class GoogleSheetsService {
 
         if (userName) filter.user = userName;
 
-        return this.getRows(filter);
+        return this.getRows(filter, sheetName);
     }
 
-    async getLastEntry(userName = null) {
-        const entries = await this.getAllEntries(userName);
+    async getLastEntry(userName = null, sheetName = null) {
+        const entries = await this.getAllEntries(userName, sheetName);
         return entries.length > 0 ? entries[entries.length - 1] : null;
     }
 
-    async countEntriesByType(type, userName = null) {
-        const entries = await this.getAllEntries(userName);
+    async countEntriesByType(type, userName = null, sheetName = null) {
+        const entries = await this.getAllEntries(userName, sheetName);
         return entries.filter(entry => entry.type === type).length;
     }
 
@@ -437,12 +442,15 @@ class GoogleSheetsService {
         return Array.from(users);
     }
 
-    async undoLastEntry(userName) {
+    async undoLastEntry(userName, sheetName = null) {
         if (!this.initialized) await this.initialize();
 
         try {
-            // Get all entries for the user
-            const entries = await this.getAllEntries(userName);
+            // Use provided sheetName or fall back to default
+            const targetSheet = sheetName || this.sheetName;
+
+            // Get all entries for the user from the target sheet
+            const entries = await this.getAllEntries(userName, targetSheet);
             if (entries.length === 0) {
                 return { success: false, message: 'No entries found to undo' };
             }
@@ -454,7 +462,7 @@ class GoogleSheetsService {
             const requests = [{
                 deleteDimension: {
                     range: {
-                        sheetId: await this.getSheetId(),
+                        sheetId: await this.getSheetIdByName(targetSheet),
                         dimension: 'ROWS',
                         startIndex: lastEntryIndex,
                         endIndex: lastEntryIndex + 1
@@ -468,10 +476,10 @@ class GoogleSheetsService {
             });
 
             const lastEntry = entries[entries.length - 1];
-            console.log(`Undid last entry for ${userName}: ${lastEntry.type} - ${lastEntry.value}`);
+            console.log(`Undid last entry for ${userName} from ${targetSheet}: ${lastEntry.type} - ${lastEntry.details || lastEntry.value}`);
             return {
                 success: true,
-                message: `Removed: ${lastEntry.type} - ${lastEntry.value}`,
+                message: `Removed: ${lastEntry.type} - ${lastEntry.details || lastEntry.value}`,
                 entry: lastEntry
             };
         } catch (error) {

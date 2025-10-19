@@ -349,7 +349,7 @@ async function logFromNLU(message, parseResult) {
     if (intent === 'symptom' || intent === 'reflux') {
         await offerTriggerLink(message, userId);
         await checkRoughPatch(message, userId);
-        await surfaceTrendChip(message, userTag);
+        await surfaceTrendChip(message, userTag, userId);
     }
 }
 
@@ -450,9 +450,10 @@ async function checkRoughPatch(message, userId) {
 /**
  * Surface trend chip after symptom log
  */
-async function surfaceTrendChip(message, userTag) {
+async function surfaceTrendChip(message, userTag, userId) {
     try {
-        const entries = await googleSheets.getWeekEntries(userTag);
+        const sheetName = googleSheets.getLogSheetNameForUser(userId);
+        const entries = await googleSheets.getWeekEntries(userTag, sheetName);
         const trends = await PatternAnalyzer.calculateTrends(entries, userTag, 7);
 
         if (trends.trend !== 'no_data') {
@@ -799,8 +800,11 @@ async function handleHelp(message) {
 }
 
 async function handleToday(message) {
+    const userId = message.author.id;
     const userName = getUserName(message.author.username);
-    const todayData = await analyzer.getTodaySummary(userName);
+    const sheetName = googleSheets.getLogSheetNameForUser(userId);
+
+    const todayData = await googleSheets.getTodayEntries(userName, sheetName);
 
     if (!todayData || todayData.length === 0) {
         return message.reply('No entries found for today. Start tracking with `!food`, `!symptom`, or other commands!');
@@ -825,7 +829,8 @@ async function handleToday(message) {
         const value = entries.map(e => {
             const time = moment(e.timestamp).format('HH:mm');
             const severity = e.severity ? ` (${e.severity})` : '';
-            return `• ${time} - ${e.value}${severity}`;
+            const details = e.details || e.value;
+            return `• ${time} - ${details}${severity}`;
         }).join('\n');
 
         embed.addFields({
@@ -839,24 +844,49 @@ async function handleToday(message) {
 }
 
 async function handleWeek(message) {
+    const userId = message.author.id;
     const userName = getUserName(message.author.username);
-    const weekData = await analyzer.getWeeklySummary(userName);
+    const sheetName = googleSheets.getLogSheetNameForUser(userId);
 
-    if (!weekData || weekData.totalEntries === 0) {
+    const weekData = await googleSheets.getWeekEntries(userName, sheetName);
+
+    if (!weekData || weekData.length === 0) {
         return message.reply('No entries found for this week. Start tracking to see your patterns!');
     }
+
+    // Calculate summary stats
+    const totalEntries = weekData.length;
+    const symptomDays = new Set(weekData.filter(e => e.type === 'symptom' || e.type === 'reflux').map(e => e.date)).size;
+    const avgDailyEntries = (totalEntries / 7).toFixed(1);
+
+    // Top foods
+    const foods = weekData.filter(e => e.type === 'food').map(e => e.details || e.value);
+    const foodCounts = {};
+    foods.forEach(f => foodCounts[f] = (foodCounts[f] || 0) + 1);
+    const topFoods = Object.entries(foodCounts)
+        .sort((a, b) => b[1] - a[1])
+        .slice(0, 3)
+        .map(([food]) => food);
+
+    // Common symptoms
+    const symptoms = weekData.filter(e => e.type === 'symptom' || e.type === 'reflux').map(e => e.details || e.value);
+    const symptomCounts = {};
+    symptoms.forEach(s => symptomCounts[s] = (symptomCounts[s] || 0) + 1);
+    const commonSymptoms = Object.entries(symptomCounts)
+        .sort((a, b) => b[1] - a[1])
+        .slice(0, 3)
+        .map(([symptom]) => symptom);
 
     const embed = new EmbedBuilder()
         .setColor(0x9932CC)
         .setTitle(`📈 Weekly Summary for ${userName}`)
         .setDescription(`Week of ${moment().tz(TIMEZONE).startOf('week').format('MMM DD')} - ${moment().tz(TIMEZONE).endOf('week').format('MMM DD, YYYY')}`)
         .addFields(
-            { name: 'Total Entries', value: `${weekData.totalEntries}`, inline: true },
-            { name: 'Most Active Day', value: weekData.mostActiveDay || 'N/A', inline: true },
-            { name: 'Symptom Days', value: `${weekData.symptomDays}/7`, inline: true },
-            { name: 'Top Foods', value: weekData.topFoods.join(', ') || 'None tracked', inline: false },
-            { name: 'Common Symptoms', value: weekData.commonSymptoms.join(', ') || 'None tracked', inline: false },
-            { name: 'Average Daily Entries', value: `${weekData.avgDailyEntries.toFixed(1)}`, inline: true }
+            { name: 'Total Entries', value: `${totalEntries}`, inline: true },
+            { name: 'Symptom Days', value: `${symptomDays}/7`, inline: true },
+            { name: 'Average Daily Entries', value: `${avgDailyEntries}`, inline: true },
+            { name: 'Top Foods', value: topFoods.join(', ') || 'None tracked', inline: false },
+            { name: 'Common Symptoms', value: commonSymptoms.join(', ') || 'None tracked', inline: false }
         )
         .setTimestamp();
 
@@ -889,12 +919,17 @@ async function handleStreak(message) {
 }
 
 async function handlePatterns(message) {
+    const userId = message.author.id;
     const userName = getUserName(message.author.username);
-    const patterns = await analyzer.analyzePatterns(userName);
+    const sheetName = googleSheets.getLogSheetNameForUser(userId);
 
-    if (!patterns) {
+    const entries = await googleSheets.getAllEntries(userName, sheetName);
+
+    if (!entries || entries.length < 7) {
         return message.reply('Need more data to analyze patterns. Keep tracking for at least a week!');
     }
+
+    const patterns = await analyzer.analyzePatterns(userName);
 
     const embed = new EmbedBuilder()
         .setColor(0x4169E1)
@@ -988,10 +1023,12 @@ async function handleNLPResult(message, nlpResult) {
 
 // Handle undo command
 async function handleUndo(message) {
+    const userId = message.author.id;
     const userName = getUserName(message.author.username);
+    const sheetName = googleSheets.getLogSheetNameForUser(userId);
 
     try {
-        const result = await googleSheets.undoLastEntry(userName);
+        const result = await googleSheets.undoLastEntry(userName, sheetName);
 
         if (result.success) {
             await message.react('↩️');
@@ -1089,10 +1126,12 @@ async function handleClarifiedMessage(message, clarificationResult) {
 
 // Handle insights command - show pattern insights
 async function handleInsights(message) {
+    const userId = message.author.id;
     const userName = getUserName(message.author.username);
+    const sheetName = googleSheets.getLogSheetNameForUser(userId);
 
     try {
-        const entries = await googleSheets.getAllEntries(userName);
+        const entries = await googleSheets.getAllEntries(userName, sheetName);
 
         if (entries.length < 10) {
             return message.reply('📊 You need at least 10 entries for meaningful insights. Keep tracking!');
@@ -1128,10 +1167,12 @@ async function handleInsights(message) {
 
 // Handle triggers command - show trigger correlations
 async function handleTriggers(message) {
+    const userId = message.author.id;
     const userName = getUserName(message.author.username);
+    const sheetName = googleSheets.getLogSheetNameForUser(userId);
 
     try {
-        const entries = await googleSheets.getAllEntries(userName);
+        const entries = await googleSheets.getAllEntries(userName, sheetName);
 
         if (entries.length < 5) {
             return message.reply('📊 You need more entries to detect trigger patterns. Keep tracking!');
@@ -1182,10 +1223,12 @@ async function handleTriggers(message) {
 
 // Handle trends command - show symptom trends
 async function handleTrends(message) {
+    const userId = message.author.id;
     const userName = getUserName(message.author.username);
+    const sheetName = googleSheets.getLogSheetNameForUser(userId);
 
     try {
-        const entries = await googleSheets.getAllEntries(userName);
+        const entries = await googleSheets.getAllEntries(userName, sheetName);
 
         if (entries.length < 5) {
             return message.reply('📊 You need more entries to calculate trends. Keep tracking!');
@@ -1222,10 +1265,12 @@ async function handleTrends(message) {
 
 // Handle weekly summary command
 async function handleWeeklySummary(message) {
+    const userId = message.author.id;
     const userName = getUserName(message.author.username);
+    const sheetName = googleSheets.getLogSheetNameForUser(userId);
 
     try {
-        const entries = await googleSheets.getAllEntries(userName);
+        const entries = await googleSheets.getAllEntries(userName, sheetName);
 
         if (entries.length < 3) {
             return message.reply('📊 You need more entries for a weekly summary. Keep tracking!');
