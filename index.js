@@ -38,6 +38,17 @@ const { scheduleAll, updateUserSchedule } = require('./src/scheduler/reminders')
 // Start keep-alive server for Replit deployment
 keepAlive();
 
+// ========== Clean Messaging System (Phase 7) ==========
+// Monkey-patch message.reply() globally to remove gray reply bar
+const { sendCleanReply } = require('./src/utils/messaging');
+const { Message } = require('discord.js');
+
+Message.prototype.reply = function (content, options) {
+  return sendCleanReply(this, content, options);
+};
+console.log('✅ Patched Message.prototype.reply() → clean sends (no gray bar)');
+// ======================================================
+
 // Initialize Discord client with DM support
 const client = new Client({
     intents: [
