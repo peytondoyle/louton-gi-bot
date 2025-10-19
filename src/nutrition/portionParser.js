@@ -1,19 +1,24 @@
 /**
- * Portion/serving parser and normalizer
+ * Portion/serving parser and normalizer - V2
  * Extracts portion sizes from text and converts to grams/ml
+ * Enhanced with ontology-v2 for density-based estimation
  */
 
-// Fraction mappings
+// Import from ontology-v2 for consistency
+const { UNICODE_FRACTIONS, CAFE_SIZES, UNITS, DENSITY_MAP } = require('../nlu/ontology-v2');
+
+// Backward compatibility: merge with existing fractions
 const FRACTIONS = {
-    '¼': 0.25, '1/4': 0.25,
-    '½': 0.5, '1/2': 0.5,
-    '¾': 0.75, '3/4': 0.75,
-    '⅓': 0.33, '1/3': 0.33,
-    '⅔': 0.67, '2/3': 0.67,
-    '⅛': 0.125, '1/8': 0.125,
-    '⅜': 0.375, '3/8': 0.375,
-    '⅝': 0.625, '5/8': 0.625,
-    '⅞': 0.875, '7/8': 0.875
+    ...UNICODE_FRACTIONS,
+    '1/4': 0.25,
+    '1/2': 0.5,
+    '3/4': 0.75,
+    '1/3': 0.33,
+    '2/3': 0.67,
+    '1/8': 0.125,
+    '3/8': 0.375,
+    '5/8': 0.625,
+    '7/8': 0.875
 };
 
 // Starbucks/coffee size mappings (in ml)
@@ -222,11 +227,52 @@ function extractPortion(text, itemType = 'food') {
     return null;
 }
 
+/**
+ * Infer portion in grams/ml by category using density map
+ * @param {string} item - Item name (e.g., "cereal", "rice", "yogurt")
+ * @param {string} unit - Unit (e.g., "cup", "bowl")
+ * @param {number} qty - Quantity
+ * @returns {Object|null} - { portion_g, portion_ml, category } or null
+ */
+function inferByCategory(item, unit, qty = 1) {
+    const itemLower = item.toLowerCase();
+
+    // Find matching category in density map
+    let density = null;
+    let category = null;
+
+    for (const [cat, gramsPerUnit] of Object.entries(DENSITY_MAP)) {
+        if (itemLower.includes(cat)) {
+            density = gramsPerUnit;
+            category = cat;
+            break;
+        }
+    }
+
+    if (!density) return null;
+
+    // Check if unit is volume-based (cup, bowl, etc.)
+    const isVolume = ['cup', 'cups', 'bowl', 'bowls', 'c'].includes(unit.toLowerCase());
+
+    if (isVolume) {
+        return {
+            portion_g: Math.round(density * qty),
+            portion_ml: null,
+            category,
+            source: 'density_map'
+        };
+    }
+
+    return null;
+}
+
 module.exports = {
     parsePortion,
     extractPortion,
     parseFraction,
+    inferByCategory,  // NEW in V2
     COFFEE_SIZES,
     VOLUME_TO_ML,
-    PORTION_TO_GRAMS
+    PORTION_TO_GRAMS,
+    FRACTIONS  // Expose enhanced fractions
 };
