@@ -56,11 +56,9 @@ class GoogleSheetsService {
             // Initialize sheets API
             this.sheets = google.sheets({ version: 'v4', auth: this.auth });
 
-            // Initialize sheet structure
-            await this.initializeSheet();
-
-            // Initialize Insights sheet with formulas
-            await this.initializeInsightsSheet();
+            // Legacy tab creation disabled - using per-user tabs (Peyton, Louis, Health_Peyton) instead
+            // await this.initializeSheet();
+            // await this.initializeInsightsSheet();
 
             this.initialized = true;
             console.log('✅ Google Sheets service initialized successfully');
