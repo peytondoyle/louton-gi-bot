@@ -54,7 +54,7 @@ async function rollupUserDay(googleSheets, userId, prefs) {
     }
 
     // Fetch rows
-    const result = await googleSheets.getRows(sheetName);
+    const result = await googleSheets.getRows({}, sheetName);
     if (!result.success) {
         console.error(`[ROLLUP] Failed to fetch rows for ${sheetName}`);
         return;

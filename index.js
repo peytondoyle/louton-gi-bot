@@ -494,7 +494,7 @@ async function logFromNLU(message, parseResult) {
     }
 
     // Build undo reference (format: sheetName:rowIndex)
-    const rowIndex = result.rowIndex || (await googleSheets.getRows(sheetName)).rows.length + 1;
+    const rowIndex = result.rowIndex || (await googleSheets.getRows({}, sheetName)).rows.length + 1;
     const undoId = `${sheetName}:${rowIndex}`;
 
     // Add to context memory
@@ -1138,7 +1138,7 @@ async function handleToday(message) {
 
     try {
         // Fetch today's entries
-        const result = await googleSheets.getRows(sheetName);
+        const result = await googleSheets.getRows({}, sheetName);
         if (!result.success) {
             return message.reply('❌ Failed to fetch today\'s data.');
         }
@@ -1180,7 +1180,7 @@ async function handleToday(message) {
         let burnCalories = null;
         if (isPeyton) {
             try {
-                const healthResult = await googleSheets.getRows('Health_Peyton');
+                const healthResult = await googleSheets.getRows({}, 'Health_Peyton');
                 if (healthResult.success) {
                     const todayHealth = healthResult.rows.find(row => row.Date === today);
                     if (todayHealth && todayHealth.Total_kcal) {

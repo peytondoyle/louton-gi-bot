@@ -35,7 +35,7 @@ async function loadUserRows(googleSheets, userName, sheetName, { sinceDays = 30 
     const startTime = Date.now();
 
     try {
-        const result = await googleSheets.getRows(sheetName);
+        const result = await googleSheets.getRows({}, sheetName);
         if (!result.success) {
             console.error(`[INSIGHTS] Failed to load ${sheetName}:`, result.error);
             return [];
@@ -107,7 +107,7 @@ async function loadHealthRows(googleSheets, { sinceDays = 30 } = {}) {
     const startTime = Date.now();
 
     try {
-        const result = await googleSheets.getRows('Health_Peyton');
+        const result = await googleSheets.getRows({}, 'Health_Peyton');
         if (!result.success) {
             console.log(`[INSIGHTS] Health_Peyton not available`);
             return new Map();

@@ -92,7 +92,7 @@ async function handleUndo(interaction, deps) {
 
     try {
         // Soft delete: mark as deleted in Notes
-        const result = await googleSheets.getRows(sheetName);
+        const result = await googleSheets.getRows({}, sheetName);
         if (!result.success || !result.rows[rowIndex - 2]) { // -2 for header
             await interaction.reply({
                 content: '❌ Entry not found or already removed.',
@@ -219,7 +219,7 @@ async function applyPortionUpdate(interaction, deps, sheetName, rowIndex, portio
         const portion = parsePortion(portionText, 'food');
 
         // Get current row
-        const result = await googleSheets.getRows(sheetName);
+        const result = await googleSheets.getRows({}, sheetName);
         if (!result.success || !result.rows[rowIndex - 2]) {
             await interaction.reply({ content: '❌ Entry not found.', ephemeral: true });
             return;
@@ -363,7 +363,7 @@ async function applyBrandUpdate(interaction, deps, sheetName, rowIndex, brandTex
         const brandInfo = findBrandInfo(brandText);
 
         // Get current row
-        const result = await googleSheets.getRows(sheetName);
+        const result = await googleSheets.getRows({}, sheetName);
         if (!result.success || !result.rows[rowIndex - 2]) {
             await interaction.reply({ content: '❌ Entry not found.', ephemeral: true });
             return;
@@ -475,7 +475,7 @@ async function handlePhotoMessage(message, deps) {
         }
 
         // Get current row
-        const result = await googleSheets.getRows(sheetName);
+        const result = await googleSheets.getRows({}, sheetName);
         if (!result.success || !result.rows[rowIndex - 2]) {
             await message.reply('❌ Entry not found.');
             clearPendingInteraction(userId, 'photo');

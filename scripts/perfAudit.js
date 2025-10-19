@@ -18,7 +18,7 @@ async function runAudit() {
     console.log('📊 Test 1: Sheets Read Latency (uncached)');
     const start1 = Date.now();
     try {
-        const sample = await googleSheets.getRows('Peyton');
+        const sample = await googleSheets.getRows({}, 'Peyton');
         const readLatency = Date.now() - start1;
         console.log(`   ✅ Read ${sample.rows?.length || 0} rows in ${readLatency}ms`);
         console.log(`   ${readLatency < 1000 ? '✅' : '⚠️'} Target: <1000ms\n`);
