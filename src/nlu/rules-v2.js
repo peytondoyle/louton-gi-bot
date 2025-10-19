@@ -187,49 +187,9 @@ function rulesParse(text, options = {}) {
     if (timeInfo.approx) result.slots.time_approx = timeInfo.approx;
 
     // ========== 4. LOGGABLE INTENTS (Priority Order) ==========
+    // NOTE: BM detection handled by early route (step 0) - if we're here, it's not BM
 
-    // 4a. BM Detection (STRENGTHENED - checks tokens for BM keywords)
-    const tokens = cleanedLower.split(/\s+/);
-    const hasBMKeyword = tokens.some(t => BM_KEYWORDS.has(t));
-
-    if (hasBMKeyword) {
-        result.intent = "bm";
-        result.confidence = 0.90; // High confidence when BM keyword present
-
-        // Auto-classify Bristol using BRISTOL_ADJ
-        let bristolDetected = false;
-        for (const token of tokens) {
-            if (BRISTOL_ADJ[token]) {
-                result.slots.bristol = String(BRISTOL_ADJ[token]);
-                result.slots.bristol_note = `auto-detected from ${token}`;
-                bristolDetected = true;
-                break;
-            }
-        }
-
-        // Check descriptors if no adjective match
-        if (!bristolDetected) {
-            for (const [type, keywords] of Object.entries(BM_DESCRIPTORS)) {
-                if (containsSynonym(cleanedLower, keywords)) {
-                    const bristol = BM_BRISTOL_MAP[type];
-                    if (bristol) {
-                        result.slots.bristol = String(bristol);
-                        result.slots.bristol_note = `auto-detected from ${type}`;
-                        bristolDetected = true;
-                    }
-                    break;
-                }
-            }
-        }
-
-        if (!bristolDetected) {
-            result.missing.push("bristol");
-        }
-
-        return result;
-    }
-
-    // 4b. Reflux Detection
+    // 4a. Reflux Detection
     const refluxKeywords = ["reflux", "heartburn", "acid", "acid reflux", "gerd", "burning chest"];
     if (containsSynonym(cleanedLower, refluxKeywords)) {
         result.intent = "reflux";
