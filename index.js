@@ -367,6 +367,27 @@ async function logFromNLU(message, parseResult) {
     }
     if (metadata.brand) notes.push(`brand=${metadata.brand}`);
 
+    // Brand-specific info (variant detection)
+    if (metadata.brandInfo) {
+        notes.push(`brand_variant=${metadata.brandInfo.brand}`);
+        if (metadata.brandInfo.variant) {
+            notes.push(`variant=${metadata.brandInfo.variant}`);
+        }
+        // Update portion multiplier if brand has specific calorie info
+        if (metadata.brandInfo.multiplier && !metadata.portion) {
+            portionMultiplier = metadata.brandInfo.multiplier;
+        }
+    }
+
+    // Caffeine detection
+    if (metadata.caffeine) {
+        if (metadata.caffeine.isDecaf) {
+            notes.push('decaf');
+        } else if (metadata.caffeine.hasCaffeine) {
+            notes.push('caffeine');
+        }
+    }
+
     // Sides are already in slots from extractItem
     if (slots.sides) notes.push(`sides=${slots.sides}`);
 

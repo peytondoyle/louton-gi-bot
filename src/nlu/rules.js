@@ -16,6 +16,7 @@ const {
     getWindowStartTime
 } = require('./ontology');
 const { extractPortion } = require('../nutrition/portionParser');
+const { findBrandInfo, checkCaffeine } = require('../nutrition/brandLexicon');
 
 /**
  * @typedef {Object} ParseResult
@@ -351,7 +352,7 @@ function extractItem(text) {
  * Extract quantity/brand/portion information from text
  * @param {string} text - Original text
  * @param {string} itemType - Type of item ('food' or 'drink')
- * @returns {Object} - { quantity, brand, portion }
+ * @returns {Object} - { quantity, brand, portion, brandInfo, caffeine }
  */
 function extractMetadata(text, itemType = 'food') {
     const metadata = {};
@@ -360,6 +361,20 @@ function extractMetadata(text, itemType = 'food') {
     const portion = extractPortion(text, itemType);
     if (portion) {
         metadata.portion = portion;
+    }
+
+    // Brand-specific detection (oat milk, chai, coffee, cereal variants)
+    const brandInfo = findBrandInfo(text);
+    if (brandInfo) {
+        metadata.brandInfo = brandInfo;
+    }
+
+    // Caffeine detection
+    if (itemType === 'drink') {
+        const caffeine = checkCaffeine(text);
+        if (caffeine.hasCaffeine || caffeine.isDecaf) {
+            metadata.caffeine = caffeine;
+        }
     }
 
     // Legacy quantity extraction (kept for backward compatibility)
