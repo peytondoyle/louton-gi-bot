@@ -1,10 +1,11 @@
 const express = require('express');
+const crypto = require('crypto');
 const googleSheets = require('./services/googleSheets');
 
 const server = express();
 
-// Middleware to parse JSON bodies
-server.use(express.json());
+// Middleware to parse raw body as text (required for HMAC verification)
+server.use(express.text({ type: '*/*' }));
 
 // Health check endpoint for UptimeRobot
 server.all('/', (req, res) => {
@@ -67,29 +68,93 @@ server.get('/health', (req, res) => {
     });
 });
 
-// Health data ingestion endpoint (Peyton only)
+// ========== HEALTH DATA INGESTION ENDPOINT ==========
+// Receives Apple Health data from iOS Shortcuts via webhook
+// Verifies HMAC-SHA256 signature for security
+
+/**
+ * Verify HMAC-SHA256 signature
+ * @param {string} rawBody - Raw request body
+ * @param {string} signature - X-Signature header value
+ * @param {string} secret - Signing secret from env
+ * @returns {boolean} - True if signature matches
+ */
+function verifyHmac(rawBody, signature, secret) {
+    if (!signature || !secret) return false;
+
+    const expectedMac = crypto
+        .createHmac('sha256', secret)
+        .update(rawBody)
+        .digest('hex');
+
+    return expectedMac === signature;
+}
+
+/**
+ * POST /ingest/health
+ * Receives health data (calories, steps, etc.) from iOS Shortcuts
+ *
+ * Expected payload:
+ * {
+ *   "date": "2025-10-19",
+ *   "total_kcal": 2150,
+ *   "active_kcal": 450,
+ *   "basal_kcal": 1700,
+ *   "steps": 8234
+ * }
+ *
+ * Headers required:
+ * - X-Signature: HMAC-SHA256 hex signature of raw body
+ */
 server.post('/ingest/health', async (req, res) => {
+    console.log('📥 [HEALTH] Received ingest request');
+
+    // Get signature and secret
+    const signature = req.get('X-Signature');
+    const secret = process.env.HEALTH_SIGNING_SECRET;
+    const rawBody = req.body;
+
+    // Verify signature
+    if (!verifyHmac(rawBody, signature, secret)) {
+        console.log('❌ [HEALTH] Invalid signature - request rejected');
+        return res.status(401).json({
+            ok: false,
+            error: 'Invalid signature'
+        });
+    }
+
+    // Parse payload
+    let payload;
     try {
-        console.log('📥 Received health data ingestion request');
+        payload = JSON.parse(rawBody);
+    } catch (error) {
+        console.log('❌ [HEALTH] Invalid JSON payload');
+        return res.status(400).json({
+            ok: false,
+            error: 'Invalid JSON'
+        });
+    }
 
-        const {
-            date,
-            active_kcal,
-            basal_kcal,
-            total_kcal,
-            steps,
-            exercise_min,
-            weight,
-            source
-        } = req.body;
+    // Extract fields
+    const { date, total_kcal, active_kcal, basal_kcal, steps, exercise_min, weight, source } = payload;
 
-        // Validate required fields
-        if (!date || !total_kcal) {
-            return res.status(400).json({
-                error: 'Missing required fields: date and total_kcal are required'
-            });
-        }
+    // Validate required fields
+    if (!date || total_kcal === undefined) {
+        console.log('❌ [HEALTH] Missing required fields (date, total_kcal)');
+        return res.status(400).json({
+            ok: false,
+            error: 'Missing required fields'
+        });
+    }
 
+    // Log received data
+    console.log(`✅ [HEALTH] Received data for ${date}:`);
+    console.log(`   Total: ${total_kcal} kcal`);
+    console.log(`   Active: ${active_kcal || 'N/A'} kcal`);
+    console.log(`   Basal: ${basal_kcal || 'N/A'} kcal`);
+    console.log(`   Steps: ${steps || 'N/A'}`);
+
+    try {
         // Build row object
         const rowObj = {
             'Date': date,
@@ -111,27 +176,36 @@ server.post('/ingest/health', async (req, res) => {
         const result = await googleSheets.appendRowToSheet('Health_Peyton', rowObj);
 
         if (result.success) {
-            console.log(`✅ Health data logged to Health_Peyton: ${date}`);
+            console.log(`✅ [HEALTH] Data logged to Health_Peyton: ${date}`);
+
+            // Success response
             return res.json({
-                success: true,
-                message: 'Health data logged successfully',
-                rowNumber: result.rowNumber
+                ok: true,
+                date: date,
+                received: {
+                    total_kcal,
+                    active_kcal: active_kcal || null,
+                    basal_kcal: basal_kcal || null,
+                    steps: steps || null
+                }
             });
         } else {
-            console.error('❌ Failed to log health data:', result.error);
+            console.error('❌ [HEALTH] Failed to log data:', result.error);
             return res.status(500).json({
-                success: false,
-                error: result.error.message
+                ok: false,
+                error: 'Failed to write to Sheets'
             });
         }
     } catch (error) {
-        console.error('❌ Error in health ingestion:', error);
+        console.error('❌ [HEALTH] Error processing data:', error);
         return res.status(500).json({
-            success: false,
+            ok: false,
             error: error.message
         });
     }
 });
+
+// ========== END HEALTH INGESTION ==========
 
 function keepAlive() {
     server.listen(3000, () => {
