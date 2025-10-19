@@ -31,6 +31,10 @@ const buttonHandlers = require('./src/handlers/buttonHandlers');
 // Calorie estimation
 const { estimateCaloriesForItemAndSides } = require('./src/nutrition/estimateCalories');
 
+// Reminders & preferences
+const { getUserPrefs, setUserPrefs } = require('./services/prefs');
+const { scheduleAll, updateUserSchedule } = require('./src/scheduler/reminders');
+
 // Start keep-alive server for Replit deployment
 keepAlive();
 
@@ -64,6 +68,9 @@ const LOUIS_ID = process.env.LOUIS_ID || "552563833814646807";
 
 // Per-user daily calorie goals (in-memory storage)
 const userGoals = new Map();
+
+// Symptom follow-up timers (userId -> timeoutId)
+const pendingFollowups = new Map();
 
 // Trigger foods and drinks to track
 const TRIGGER_ITEMS = {
@@ -118,6 +125,9 @@ const commands = {
     '!trends': handleTrends,
     '!weekly': handleWeeklySummary,
     '!goal': handleGoal,
+    '!reminders': handleReminders,
+    '!timezone': handleTimezone,
+    '!snooze': handleSnooze,
     '!test': handleTest  // Debug test command
 };
 
@@ -158,12 +168,21 @@ client.once('ready', async () => {
             'Date', 'Active_kcal', 'Basal_kcal', 'Total_kcal', 'Steps', 'Exercise_min', 'Weight', 'Source'
         ]);
         console.log('✅ User tabs ensured: Peyton, Louis, Health_Peyton');
+
+        // Set up proactive reminders (per-user, timezone-aware)
+        console.log('🔔 Setting up proactive reminders...');
+        await scheduleAll(client, googleSheets, {
+            getLogSheetNameForUser: googleSheets.getLogSheetNameForUser.bind(googleSheets),
+            getTodayEntries: googleSheets.getTodayEntries.bind(googleSheets),
+            setUserPrefs: (id, partial) => setUserPrefs(id, partial, googleSheets)
+        });
+        console.log('✅ Proactive reminders initialized');
     } catch (error) {
         console.error('❌ Failed to connect to Google Sheets:', error.message);
         console.log('The bot will continue but data logging will fail.');
     }
 
-    // Set up scheduled reminders if enabled
+    // Set up scheduled reminders if enabled (legacy)
     if (ENABLE_REMINDERS) {
         setupReminders();
     }
@@ -350,6 +369,9 @@ async function logFromNLU(message, parseResult) {
         await offerTriggerLink(message, userId);
         await checkRoughPatch(message, userId);
         await surfaceTrendChip(message, userTag, userId);
+
+        // Schedule a follow-up DM in 90-150 minutes
+        await scheduleSymptomFollowup(userId);
     }
 }
 
@@ -445,6 +467,45 @@ async function checkRoughPatch(message, userId) {
         const phrase = getRandomPhrase(PHRASES.roughPatch);
         await message.channel.send(`${EMOJI.heart} ${phrase}`);
     }
+}
+
+/**
+ * Schedule a follow-up DM after a symptom is logged (90-150 min delay)
+ * @param {string} userId - Discord user ID
+ */
+async function scheduleSymptomFollowup(userId) {
+    // Cancel existing follow-up if any
+    if (pendingFollowups.has(userId)) {
+        clearTimeout(pendingFollowups.get(userId));
+        console.log(`[FOLLOWUP] Cancelled existing follow-up for user ${userId}`);
+    }
+
+    // Random delay between 90-150 minutes
+    const delayMs = 1000 * 60 * (90 + Math.floor(Math.random() * 61));
+    const delayMin = Math.round(delayMs / 1000 / 60);
+
+    console.log(`[FOLLOWUP] Scheduling follow-up for user ${userId} in ${delayMin} minutes`);
+
+    const timeoutId = setTimeout(async () => {
+        try {
+            const user = await client.users.fetch(userId);
+            await user.send(
+                '⏳ **Symptom follow-up**\n\n' +
+                'How are you feeling now?\n\n' +
+                '• Log a follow-up: "feeling better"\n' +
+                '• Log water intake: "had 16oz water"\n' +
+                '• Type `!today` to see your day'
+            );
+            console.log(`[FOLLOWUP] ✅ Sent follow-up DM to user ${userId}`);
+        } catch (error) {
+            console.log(`[FOLLOWUP] ❌ Failed to send follow-up to user ${userId}:`, error.message);
+        }
+
+        // Remove from pending map
+        pendingFollowups.delete(userId);
+    }, delayMs);
+
+    pendingFollowups.set(userId, timeoutId);
 }
 
 /**
@@ -1355,6 +1416,181 @@ async function handleGoal(message, args) {
     userGoals.set(userId, val);
 
     return message.reply(`✅ Set your daily goal to **${val} kcal**.`);
+}
+
+// Handle reminders command - configure proactive reminders
+async function handleReminders(message, args) {
+    const userId = message.author.id;
+
+    if (!args || args.trim() === '') {
+        return message.reply(
+            '🔔 **Reminder Settings**\n\n' +
+            '**Usage:**\n' +
+            '• `!reminders on` - Enable reminders\n' +
+            '• `!reminders off` - Disable reminders\n' +
+            '• `!reminders time 08:00` - Set morning check-in\n' +
+            '• `!reminders evening 20:30` - Set evening recap\n' +
+            '• `!reminders inactivity 14:00` - Set inactivity nudge\n\n' +
+            '_Blank time to disable: `!reminders evening`_'
+        );
+    }
+
+    const [sub, val] = args.trim().split(/\s+/);
+
+    // Handle on/off
+    if (sub === 'on' || sub === 'off') {
+        await setUserPrefs(userId, { DM: sub }, googleSheets);
+        await updateUserSchedule(client, googleSheets, userId, {
+            getLogSheetNameForUser: googleSheets.getLogSheetNameForUser.bind(googleSheets),
+            getTodayEntries: googleSheets.getTodayEntries.bind(googleSheets),
+            setUserPrefs: (id, partial) => setUserPrefs(id, partial, googleSheets)
+        });
+        return message.reply(`🔔 Reminders ${sub === 'on' ? '**enabled**' : '**disabled**'}.`);
+    }
+
+    // Handle time settings
+    const keyMap = {
+        time: 'MorningHHMM',
+        morning: 'MorningHHMM',
+        evening: 'EveningHHMM',
+        inactivity: 'InactivityHHMM'
+    };
+
+    const key = keyMap[sub];
+    if (key) {
+        const timeValue = (val || '').trim();
+
+        // Validate time format if provided
+        if (timeValue && !/^\d{1,2}:\d{2}$/.test(timeValue)) {
+            return message.reply('⚠️ Invalid time format. Use HH:MM (e.g., `08:00` or `20:30`)');
+        }
+
+        await setUserPrefs(userId, { [key]: timeValue }, googleSheets);
+        await updateUserSchedule(client, googleSheets, userId, {
+            getLogSheetNameForUser: googleSheets.getLogSheetNameForUser.bind(googleSheets),
+            getTodayEntries: googleSheets.getTodayEntries.bind(googleSheets),
+            setUserPrefs: (id, partial) => setUserPrefs(id, partial, googleSheets)
+        });
+
+        const labelMap = {
+            time: '⏰ Morning check-in',
+            morning: '⏰ Morning check-in',
+            evening: '🌙 Evening recap',
+            inactivity: '📭 Inactivity nudge'
+        };
+
+        const label = labelMap[sub];
+        return message.reply(`${label} ${timeValue ? `set to **${timeValue}**` : '**disabled**'}.`);
+    }
+
+    return message.reply('⚠️ Unknown subcommand. Use `!reminders` for help.');
+}
+
+// Handle timezone command - set user timezone
+async function handleTimezone(message, args) {
+    const userId = message.author.id;
+    const tz = (args || '').trim();
+
+    if (!tz) {
+        const prefs = await getUserPrefs(userId, googleSheets);
+        const currentTz = prefs?.TZ || 'America/Los_Angeles';
+        return message.reply(
+            `🌐 **Timezone Settings**\n\n` +
+            `Current: **${currentTz}**\n\n` +
+            `**Usage:** \`!timezone America/Los_Angeles\`\n\n` +
+            `Common timezones:\n` +
+            `• America/New_York (EST/EDT)\n` +
+            `• America/Chicago (CST/CDT)\n` +
+            `• America/Denver (MST/MDT)\n` +
+            `• America/Los_Angeles (PST/PDT)\n` +
+            `• Europe/London\n` +
+            `• Asia/Tokyo`
+        );
+    }
+
+    // Validate timezone
+    if (!moment.tz.zone(tz)) {
+        return message.reply('⚠️ Unknown timezone. Use a valid IANA timezone (e.g., `America/New_York`).');
+    }
+
+    await setUserPrefs(userId, { TZ: tz }, googleSheets);
+    await updateUserSchedule(client, googleSheets, userId, {
+        getLogSheetNameForUser: googleSheets.getLogSheetNameForUser.bind(googleSheets),
+        getTodayEntries: googleSheets.getTodayEntries.bind(googleSheets),
+        setUserPrefs: (id, partial) => setUserPrefs(id, partial, googleSheets)
+    });
+
+    return message.reply(`🌐 Timezone set to **${tz}**.`);
+}
+
+// Handle snooze command - temporarily disable reminders
+async function handleSnooze(message, args) {
+    const userId = message.author.id;
+    const duration = (args || '').trim();
+
+    if (!duration) {
+        const prefs = await getUserPrefs(userId, googleSheets);
+        if (prefs?.SnoozeUntil) {
+            const until = moment.tz(prefs.SnoozeUntil, prefs.TZ || 'America/Los_Angeles');
+            return message.reply(
+                `💤 **Snooze Status**\n\n` +
+                `Reminders snoozed until: **${until.format('MMM DD, YYYY HH:mm')}**\n\n` +
+                `Use \`!snooze clear\` to re-enable reminders.`
+            );
+        } else {
+            return message.reply(
+                `💤 **Snooze Reminders**\n\n` +
+                `**Usage:**\n` +
+                `• \`!snooze 1h\` - Snooze for 1 hour\n` +
+                `• \`!snooze 3d\` - Snooze for 3 days\n` +
+                `• \`!snooze 1w\` - Snooze for 1 week\n` +
+                `• \`!snooze clear\` - Re-enable reminders`
+            );
+        }
+    }
+
+    if (duration === 'clear') {
+        await setUserPrefs(userId, { SnoozeUntil: '' }, googleSheets);
+        await updateUserSchedule(client, googleSheets, userId, {
+            getLogSheetNameForUser: googleSheets.getLogSheetNameForUser.bind(googleSheets),
+            getTodayEntries: googleSheets.getTodayEntries.bind(googleSheets),
+            setUserPrefs: (id, partial) => setUserPrefs(id, partial, googleSheets)
+        });
+        return message.reply('✅ Reminders re-enabled (snooze cleared).');
+    }
+
+    // Parse duration (e.g., "1h", "3d", "1w")
+    const match = duration.match(/^(\d+)([hdw])$/);
+    if (!match) {
+        return message.reply('⚠️ Invalid duration. Use format like `1h`, `3d`, or `1w`.');
+    }
+
+    const [, amount, unit] = match;
+    const prefs = await getUserPrefs(userId, googleSheets);
+    const tz = prefs?.TZ || 'America/Los_Angeles';
+    const now = moment().tz(tz);
+
+    let until;
+    switch (unit) {
+        case 'h':
+            until = now.clone().add(parseInt(amount), 'hours');
+            break;
+        case 'd':
+            until = now.clone().add(parseInt(amount), 'days');
+            break;
+        case 'w':
+            until = now.clone().add(parseInt(amount), 'weeks');
+            break;
+    }
+
+    await setUserPrefs(userId, { SnoozeUntil: until.toISOString() }, googleSheets);
+    await updateUserSchedule(client, googleSheets, userId, {
+        getLogSheetNameForUser: googleSheets.getLogSheetNameForUser.bind(googleSheets),
+        getTodayEntries: googleSheets.getTodayEntries.bind(googleSheets),
+        setUserPrefs: (id, partial) => setUserPrefs(id, partial, googleSheets)
+    });
+
+    return message.reply(`💤 Reminders snoozed until **${until.format('MMM DD, YYYY HH:mm')}**.`);
 }
 
 function setupReminders() {
