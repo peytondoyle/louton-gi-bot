@@ -27,6 +27,10 @@ const { postprocess } = require('./src/nlu/postprocess');
 const { handleHelpPalette } = require('./src/commands/helpPalette');
 const { CommandRegistry } = require('./src/commands/registry');
 
+// Charts System
+const { handleChart } = require('./src/commands/chart');
+const { handleChartsMenu, handleChartButton } = require('./src/commands/chartsMenu');
+
 // UX System imports
 const { EMOJI, PHRASES, getRandomPhrase, BUTTON_IDS } = require('./src/constants/ux');
 const { buttonsSeverity, buttonsMealTime, buttonsBristol, buttonsSymptomType, trendChip } = require('./src/ui/components');
@@ -165,6 +169,8 @@ const commands = {
     '!timezone': handleTimezone,
     '!snooze': handleSnooze,
     '!nlu-stats': handleNLUStats,
+    '!chart': (msg, args) => handleChart(msg, args, { googleSheets, getUserPrefs, getLogSheetNameForUser: googleSheets.getLogSheetNameForUser, PEYTON_ID }),
+    '!charts': handleChartsMenu,
     '!test': handleTest
 };
 
@@ -229,7 +235,7 @@ client.once('ready', async () => {
 
 // Button interaction listener
 client.on('interactionCreate', async (interaction) => {
-    if (!interaction.isButton()) return;
+    if (!interaction.isButton() && !interaction.isStringSelectMenu()) return;
 
     // ========== PHASE 4.1: RESPONSE WATCHER ==========
     // Check if user is under watch (within 20 min of reminder)
@@ -237,6 +243,18 @@ client.on('interactionCreate', async (interaction) => {
     if (isUnderWatch(userId)) {
         const prefs = await getUserPrefs(userId, googleSheets);
         await markInteracted(userId, prefs, googleSheets);
+    }
+
+    // Route chart buttons
+    if (interaction.customId.startsWith('chart:')) {
+        const chartDeps = {
+            googleSheets,
+            getUserPrefs,
+            getLogSheetNameForUser: googleSheets.getLogSheetNameForUser,
+            PEYTON_ID
+        };
+        await handleChartButton(interaction, chartDeps);
+        return;
     }
 
     // Route UX buttons (Phase 2)

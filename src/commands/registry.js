@@ -234,6 +234,30 @@ const CommandRegistry = (() => {
     examples: ['!howto']
   });
 
+  // ========== CHARTS ==========
+  add({
+    name: '!chart',
+    category: 'Insights',
+    description: 'Generate visual charts (budget, intake, reflux, latency, triggers).',
+    usage: ['!chart <type> <period>'],
+    examples: ['!chart budget today', '!chart intake 7d', '!chart reflux 14d', '!chart latency 30d', '!chart triggers 30d'],
+    subcommands: [
+      { name: 'budget', description: 'Intake vs Burn budget chart', usage: ['!chart budget today', '!chart budget 7d'] },
+      { name: 'intake', description: 'Intake vs Burn area chart', usage: ['!chart intake 7d'] },
+      { name: 'reflux', description: 'Reflux count/severity trend', usage: ['!chart reflux 14d'] },
+      { name: 'latency', description: 'Meal→symptom time distribution', usage: ['!chart latency 30d'] },
+      { name: 'triggers', description: 'Trigger combination lifts', usage: ['!chart triggers 30d'] }
+    ]
+  });
+
+  add({
+    name: '!charts',
+    category: 'Insights',
+    description: 'Browse available charts with interactive buttons.',
+    usage: ['!charts'],
+    examples: ['!charts']
+  });
+
   // ========== API ==========
   function all({ visibleOnly = true } = {}) {
     return visibleOnly ? list.filter(c => c.visible !== false) : list.slice();
