@@ -141,6 +141,7 @@ const commands = {
     '!reflux': handleReflux,
     '!drink': handleDrink,
     '!help': handleHelp,
+    '!howto': handleHowto,
     '!today': handleToday,
     '!week': handleWeek,
     '!streak': handleStreak,
@@ -1054,6 +1055,77 @@ async function handleHelp(message) {
             { name: '✨ Natural Language', value: 'Just tell me how you feel!\n• "feeling good today"\n• "just had chai"\n• "reflux is acting up"\n• "stomach pain mild"', inline: false }
         )
         .setFooter({ text: '💡 Tip: The bot understands natural language! Just tell it what you ate or how you feel.' });
+
+    await message.reply({ embeds: [embed] });
+}
+
+async function handleHowto(message) {
+    const embed = new EmbedBuilder()
+        .setColor(0x9B59B6)
+        .setTitle('🎯 How to Use Louton GI Bot')
+        .setDescription('A quick walkthrough of everything you can do!')
+        .addFields(
+            {
+                name: '1️⃣ Track Your Day (Natural Language)',
+                value:
+                    '**Just talk to me naturally!**\n' +
+                    '• "had pizza for lunch"\n' +
+                    '• "drinking oat milk latte"\n' +
+                    '• "mild heartburn"\n' +
+                    '• "bad poop this morning"\n\n' +
+                    'I understand what you mean and log it automatically. No commands needed!',
+                inline: false
+            },
+            {
+                name: '2️⃣ Quick Actions After Logging',
+                value:
+                    'After each log, you\'ll see buttons:\n' +
+                    '📏 **Add portion** - Specify how much (1 cup, 2 slices, etc.)\n' +
+                    '🏷️ **Add brand** - Add brand details (Oatly, Cheerios, etc.)\n' +
+                    '📸 **Add photo** - Attach a picture of your meal\n' +
+                    '↩️ **Undo** - Remove the entry within 60 seconds',
+                inline: false
+            },
+            {
+                name: '3️⃣ Daily Summaries & Insights',
+                value:
+                    '`!today` - Compact daily overview (reflux count, trend)\n' +
+                    '`!insights` - Deep analytics:\n' +
+                    '  • Trigger latency (time from meal → symptom)\n' +
+                    '  • 7-day trends (improving/stable/worsening)\n' +
+                    '  • Food combinations linked to symptoms\n' +
+                    '  • Symptom-free streak with milestones',
+                inline: false
+            },
+            {
+                name: '4️⃣ Control Reminders',
+                value:
+                    '`!dnd 22:00-07:00` - Set quiet hours (no DMs)\n' +
+                    '`!dnd off` - Turn off quiet hours\n' +
+                    '`!snooze 3h` - Temporarily pause reminders\n' +
+                    '`!timezone America/New_York` - Set your timezone\n' +
+                    '`!reminders` - Manage reminder settings',
+                inline: false
+            },
+            {
+                name: '5️⃣ Fix Mistakes',
+                value:
+                    '`!undo` - Remove your last entry\n' +
+                    '`correction: [text]` - Fix the last log\n' +
+                    'Or just click **Undo** button within 60 seconds of logging!',
+                inline: false
+            },
+            {
+                name: '💬 Tips',
+                value:
+                    '• I ignore greetings, "thanks", "lol" (won\'t create logs)\n' +
+                    '• Portions help accuracy: "2 slices pizza"\n' +
+                    '• I track patterns to help identify triggers\n' +
+                    '• All your data is private in your own tab',
+                inline: false
+            }
+        )
+        .setFooter({ text: 'Type !help for full command list' });
 
     await message.reply({ embeds: [embed] });
 }
