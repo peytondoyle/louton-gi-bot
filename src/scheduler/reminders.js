@@ -1,9 +1,12 @@
 // Proactive Reminders - Timezone-aware per-user cron scheduler
 // Supports morning check-ins, evening recaps, and inactivity nudges
+// Phase 4.1: Integrated with adaptive shifts and response watchers
 
 const cron = require('node-cron');
 const moment = require('moment-timezone');
-const { getUserPrefs, listAllPrefs, setUserPrefs } = require('../../services/prefs');
+const { getUserPrefs, listAllPrefs, setUserPrefs, isOnCooldown } = require('../../services/prefs');
+const { shouldSuppressNow, computeNextSend } = require('../reminders/adaptive');
+const { startResponseWatcher } = require('../reminders/responseWatcher');
 
 // Active cron tasks per user: Map<userId, { morning, evening, inactivity }>
 const tasks = new Map();
@@ -25,26 +28,26 @@ function _stopBucket(bucket) {
  * Send DM to user with error handling
  * @param {Object} client - Discord client
  * @param {string} userId - Discord user ID
- * @param {string} text - Message text
+ * @param {string} text - Message text or embed object
  * @param {Object} helpers - Helper functions
- * @returns {Promise<boolean>} Success status
+ * @returns {Promise<Object|null>} Sent message or null if failed
  */
 async function sendDM(client, userId, text, helpers) {
     try {
         const user = await client.users.fetch(userId);
-        await user.send(text);
+        const sentMessage = await user.send(text);
         console.log(`[REMINDER] ✅ Sent DM to user ${userId}`);
-        return true;
+        return sentMessage;
     } catch (error) {
         console.log(`[REMINDER] ❌ DM failed for user ${userId}: ${error.message}`);
         // Turn off reminders if DM fails (user has DMs closed)
         try {
-            await helpers.setUserPrefs(userId, { DM: 'off' });
+            await helpers.setUserPrefs(userId, { DM: 'off' }, helpers.googleSheets);
             console.log(`[REMINDER] 🔕 Disabled reminders for user ${userId} (DMs closed)`);
         } catch (prefError) {
             console.error(`[REMINDER] Failed to update prefs for user ${userId}:`, prefError);
         }
-        return false;
+        return null;
     }
 }
 
@@ -79,22 +82,27 @@ function scheduleForUser(client, googleSheets, userId, prefs, helpers) {
     const bucket = {};
     const tz = prefs.TZ || 'America/Los_Angeles';
 
-    console.log(`[REMINDER] Scheduling reminders for user ${userId} (TZ: ${tz})`);
+    // Phase 4.1: Compute adaptive times
+    const adaptiveShiftMin = prefs.AdaptiveShiftMin || 0;
+    console.log(`[REMINDER] Scheduling reminders for user ${userId} (TZ: ${tz}, shift: ${adaptiveShiftMin}min)`);
 
     /**
-     * Create a timezone-gated cron job
-     * @param {string} hhmm - Time in HH:MM format
+     * Create a timezone-gated cron job with adaptive shift
+     * @param {string} baseHhmm - Base time in HH:MM format
      * @param {Function} fn - Function to execute at that time
+     * @param {string} type - Reminder type (for logging)
      * @returns {Object|null} Cron task or null
      */
-    const gate = (hhmm, fn) => {
-        if (!hhmm || hhmm === '') return null;
+    const gate = (baseHhmm, fn, type) => {
+        if (!baseHhmm || baseHhmm === '') return null;
 
         try {
-            const [H, M] = hhmm.split(':').map(Number);
+            // Phase 4.1: Apply adaptive shift
+            const effectiveHhmm = computeNextSend(baseHhmm, { tz, adaptiveShiftMin });
+            const [H, M] = effectiveHhmm.split(':').map(Number);
 
             if (isNaN(H) || isNaN(M) || H < 0 || H > 23 || M < 0 || M > 59) {
-                console.error(`[REMINDER] Invalid time format: ${hhmm}`);
+                console.error(`[REMINDER] Invalid time format: ${effectiveHhmm}`);
                 return null;
             }
 
@@ -103,7 +111,15 @@ function scheduleForUser(client, googleSheets, userId, prefs, helpers) {
                 const now = moment().tz(tz);
                 if (now.hour() === H && now.minute() === M) {
                     try {
-                        await fn();
+                        // Phase 4.1: Check suppression at send time
+                        const freshPrefs = await getUserPrefs(userId, helpers.googleSheets);
+                        if (shouldSuppressNow({ userPrefs: freshPrefs, nowZoned: now })) {
+                            console.log(`[REMINDERS] Suppressed ${type} for user ${userId} (DND/snooze)`);
+                            return;
+                        }
+
+                        // Execute reminder
+                        await fn(freshPrefs);
                     } catch (error) {
                         console.error(`[REMINDER] Error in cron job:`, error);
                     }
@@ -111,18 +127,19 @@ function scheduleForUser(client, googleSheets, userId, prefs, helpers) {
             });
 
             job.start();
-            console.log(`[REMINDER] ✅ Scheduled job at ${hhmm} for user ${userId}`);
+            const shiftNote = adaptiveShiftMin !== 0 ? ` (adaptive ${adaptiveShiftMin > 0 ? '+' : ''}${adaptiveShiftMin}m)` : '';
+            console.log(`[REMINDER] ✅ Scheduled ${type} at ${effectiveHhmm}${shiftNote} for user ${userId}`);
             return job;
         } catch (error) {
-            console.error(`[REMINDER] Failed to create cron job for ${hhmm}:`, error);
+            console.error(`[REMINDER] Failed to create cron job for ${baseHhmm}:`, error);
             return null;
         }
     };
 
     // Morning check-in
     if (prefs.MorningHHMM) {
-        bucket.morning = gate(prefs.MorningHHMM, async () => {
-            await sendDM(
+        bucket.morning = gate(prefs.MorningHHMM, async (freshPrefs) => {
+            const sentMessage = await sendDM(
                 client,
                 userId,
                 '🌞 **Morning check-in** — how are you feeling?\n\n' +
@@ -131,12 +148,17 @@ function scheduleForUser(client, googleSheets, userId, prefs, helpers) {
                 '_Reply with `!reminders off` to stop these check-ins._',
                 helpers
             );
-        });
+
+            // Phase 4.1: Start response watcher
+            if (sentMessage) {
+                startResponseWatcher(userId, 'morning', sentMessage.id, freshPrefs, helpers.googleSheets);
+            }
+        }, 'morning');
     }
 
     // Evening recap
     if (prefs.EveningHHMM) {
-        bucket.evening = gate(prefs.EveningHHMM, async () => {
+        bucket.evening = gate(prefs.EveningHHMM, async (freshPrefs) => {
             try {
                 const sheetName = helpers.getLogSheetNameForUser(userId);
                 const entries = await helpers.getTodayEntries('', sheetName);
@@ -146,7 +168,7 @@ function scheduleForUser(client, googleSheets, userId, prefs, helpers) {
                 const reflux = entries.filter(e => String(e.type || e.Type).toLowerCase() === 'reflux').length;
                 const symptoms = entries.filter(e => String(e.type || e.Type).toLowerCase() === 'symptom').length;
 
-                await sendDM(
+                const sentMessage = await sendDM(
                     client,
                     userId,
                     `🌙 **Daily recap**\n\n` +
@@ -157,21 +179,36 @@ function scheduleForUser(client, googleSheets, userId, prefs, helpers) {
                     `Type \`!today\` for full details.`,
                     helpers
                 );
+
+                // Phase 4.1: Start response watcher
+                if (sentMessage) {
+                    startResponseWatcher(userId, 'evening', sentMessage.id, freshPrefs, helpers.googleSheets);
+                }
             } catch (error) {
                 console.error('[REMINDER] Evening recap failed:', error);
             }
-        });
+        }, 'evening');
     }
 
     // Inactivity nudge
     if (prefs.InactivityHHMM) {
-        bucket.inactivity = gate(prefs.InactivityHHMM, async () => {
+        bucket.inactivity = gate(prefs.InactivityHHMM, async (freshPrefs) => {
             try {
+                // Phase 4.1: Check 24h cooldown
+                const nowISO = moment().tz(tz).toISOString();
+                if (await isOnCooldown(userId, 'inactivity', nowISO, helpers.googleSheets)) {
+                    console.log(`[REMINDER] Inactivity nudge on cooldown for user ${userId}`);
+                    return;
+                }
+
                 const sheetName = helpers.getLogSheetNameForUser(userId);
                 const entries = await helpers.getTodayEntries('', sheetName);
 
-                if (!entries || entries.length === 0) {
-                    await sendDM(
+                // Filter out soft-deleted rows
+                const activeEntries = entries.filter(e => !e.notes?.includes('deleted=true'));
+
+                if (!activeEntries || activeEntries.length === 0) {
+                    const sentMessage = await sendDM(
                         client,
                         userId,
                         '👋 **Haven\'t seen a log yet today** — want to add lunch or a check-in?\n\n' +
@@ -180,11 +217,21 @@ function scheduleForUser(client, googleSheets, userId, prefs, helpers) {
                         '• "good day so far"',
                         helpers
                     );
+
+                    // Phase 4.1: Start response watcher
+                    if (sentMessage) {
+                        startResponseWatcher(userId, 'inactivity', sentMessage.id, freshPrefs, helpers.googleSheets);
+
+                        // Set 24h cooldown
+                        const { setCooldown } = require('../../services/prefs');
+                        const cooldownUntil = moment().tz(tz).add(24, 'hours').toISOString();
+                        await setCooldown(userId, 'inactivity', cooldownUntil, helpers.googleSheets);
+                    }
                 }
             } catch (error) {
                 console.error('[REMINDER] Inactivity nudge failed:', error);
             }
-        });
+        }, 'inactivity');
     }
 
     tasks.set(userId, bucket);

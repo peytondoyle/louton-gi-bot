@@ -40,6 +40,7 @@ const { getUserPrefs, setUserPrefs } = require('./services/prefs');
 const { scheduleAll, updateUserSchedule } = require('./src/scheduler/reminders');
 const { scheduleContextualFollowups } = require('./src/handlers/contextualFollowups');
 const dndCommands = require('./src/commands/dnd');
+const { markInteracted, isUnderWatch } = require('./src/reminders/responseWatcher');
 
 // Start keep-alive server for Replit deployment
 keepAlive();
@@ -211,6 +212,14 @@ client.once('ready', async () => {
 // Button interaction listener
 client.on('interactionCreate', async (interaction) => {
     if (!interaction.isButton()) return;
+
+    // ========== PHASE 4.1: RESPONSE WATCHER ==========
+    // Check if user is under watch (within 20 min of reminder)
+    const userId = interaction.user.id;
+    if (isUnderWatch(userId)) {
+        const prefs = await getUserPrefs(userId, googleSheets);
+        await markInteracted(userId, prefs, googleSheets);
+    }
 
     // Route UX buttons (Phase 2)
     if (interaction.customId.startsWith('ux:')) {
@@ -768,6 +777,14 @@ client.on('messageCreate', async (message) => {
         // Ignore bot messages
         if (message.author.bot) {
             return;
+        }
+
+        // ========== PHASE 4.1: RESPONSE WATCHER ==========
+        // Check if user is under watch (within 20 min of reminder)
+        const userId = message.author.id;
+        if (isUnderWatch(userId)) {
+            const prefs = await getUserPrefs(userId, googleSheets);
+            await markInteracted(userId, prefs, googleSheets);
         }
 
         // Extract message info
