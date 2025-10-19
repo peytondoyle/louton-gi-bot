@@ -15,6 +15,7 @@ const {
     getCurrentWindow,
     getWindowStartTime
 } = require('./ontology');
+const { extractPortion } = require('../nutrition/portionParser');
 
 /**
  * @typedef {Object} ParseResult
@@ -74,6 +75,13 @@ function rulesParse(text) {
     if (/^(lol|haha|ok|okay|cool|nice|awesome|great|perfect|got\s*it|sure|yep|yeah|nope|nah)/i.test(t)) {
         result.intent = "chit_chat";
         result.confidence = 0.9;
+        return result;
+    }
+
+    // 3d. Farewell detection
+    if (/^(bye|goodbye|good\s*bye|see\s*ya|see\s*you|later|night|good\s*night|gn|ttyl|talk\s*later)/i.test(t)) {
+        result.intent = "farewell";
+        result.confidence = 0.95;
         return result;
     }
 
@@ -340,27 +348,37 @@ function extractItem(text) {
 }
 
 /**
- * Extract quantity/brand information from text
+ * Extract quantity/brand/portion information from text
  * @param {string} text - Original text
- * @returns {Object} - { quantity, brand }
+ * @param {string} itemType - Type of item ('food' or 'drink')
+ * @returns {Object} - { quantity, brand, portion }
  */
-function extractMetadata(text) {
+function extractMetadata(text, itemType = 'food') {
     const metadata = {};
 
-    // Extract quantity patterns (16oz, grande, large, small, etc.)
-    const quantityPatterns = [
-        /(\d+\s?oz)/i,
-        /(\d+\s?ml)/i,
-        /(grande|venti|tall|large|medium|small)/i,
-        /(\d+\s?cups?)/i,
-        /(\d+\s?servings?)/i
-    ];
+    // Extract portion using new parser
+    const portion = extractPortion(text, itemType);
+    if (portion) {
+        metadata.portion = portion;
+    }
 
-    for (const pattern of quantityPatterns) {
-        const match = text.match(pattern);
-        if (match) {
-            metadata.quantity = match[1];
-            break;
+    // Legacy quantity extraction (kept for backward compatibility)
+    // Will be superseded by portion parser
+    if (!metadata.portion) {
+        const quantityPatterns = [
+            /(\d+\s?oz)/i,
+            /(\d+\s?ml)/i,
+            /(grande|venti|tall|large|medium|small)/i,
+            /(\d+\s?cups?)/i,
+            /(\d+\s?servings?)/i
+        ];
+
+        for (const pattern of quantityPatterns) {
+            const match = text.match(pattern);
+            if (match) {
+                metadata.quantity = match[1];
+                break;
+            }
         }
     }
 

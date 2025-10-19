@@ -27,6 +27,8 @@ const { buttonsSeverity, buttonsMealTime, buttonsBristol, buttonsSymptomType, tr
 const contextMemory = require('./src/utils/contextMemory');
 const digests = require('./src/scheduler/digests');
 const buttonHandlers = require('./src/handlers/buttonHandlers');
+const { isDuplicate } = require('./src/utils/dedupe');
+const { validateQuality } = require('./src/utils/qualityCheck');
 
 // Calorie estimation
 const { estimateCaloriesForItemAndSides } = require('./src/nutrition/estimateCalories');
@@ -224,6 +226,13 @@ async function handleNaturalLanguage(message) {
     const userId = message.author.id;
     const userTag = message.author.tag;
 
+    // ========== DEDUPLICATION ==========
+    // Ignore duplicate messages from same user within 2-second window
+    if (isDuplicate(userId, text, message.createdTimestamp)) {
+        console.log(`[ROUTER] ⏭️  Skipping duplicate message from ${userTag}: "${text}"`);
+        return;
+    }
+
     // Check for correction syntax first
     if (text.toLowerCase().startsWith('correction:') || text.startsWith('*')) {
         await handleCorrection(message, text);
@@ -262,6 +271,12 @@ async function handleNaturalLanguage(message) {
             return;
         }
 
+        if (result.intent === 'farewell') {
+            const farewells = ['Goodnight! 🌙', 'See you later! 👋', 'Bye! Take care! 💙', 'Talk to you soon! ✨'];
+            await message.reply(farewells[Math.floor(Math.random() * farewells.length)]);
+            return;
+        }
+
         // Confidence threshold: Don't auto-log if confidence < 80%
         if (LOGGABLE_INTENTS.includes(result.intent) && result.confidence < 0.8) {
             await message.reply({
@@ -278,6 +293,16 @@ async function handleNaturalLanguage(message) {
                 content: `${EMOJI.thinking} I'm not quite sure what you mean. Try:\n` +
                         `• "had oats for lunch"\n• "mild heartburn"\n• "bad poop"\n` +
                         `Or use commands like \`!food\`, \`!symptom\`, etc.`
+            });
+            return;
+        }
+
+        // ========== QUALITY CHECK ==========
+        // Validate input quality before logging
+        const qualityCheck = validateQuality(result);
+        if (!qualityCheck.isValid) {
+            await message.reply({
+                content: `${EMOJI.thinking} ${qualityCheck.reason}`
             });
             return;
         }
@@ -305,8 +330,8 @@ async function logFromNLU(message, parseResult) {
     const userTag = message.author.tag;
     const isPeyton = (userId === PEYTON_ID);
 
-    // Extract metadata
-    const metadata = extractMetadata(message.content);
+    // Extract metadata (pass intent as itemType)
+    const metadata = extractMetadata(message.content, intent);
 
     // Build notes array
     const notes = [];
@@ -321,8 +346,25 @@ async function logFromNLU(message, parseResult) {
         notes.push(`time=${new Date(slots.time).toLocaleTimeString()}`);
     }
 
-    // Add quantity/brand
-    if (metadata.quantity) notes.push(`qty=${metadata.quantity}`);
+    // Add portion info (new format)
+    let portionMultiplier = 1.0;
+    if (metadata.portion) {
+        if (metadata.portion.normalized_g) {
+            notes.push(`portion_g=${metadata.portion.normalized_g}`);
+        }
+        if (metadata.portion.normalized_ml) {
+            notes.push(`portion_ml=${metadata.portion.normalized_ml}`);
+        }
+        if (metadata.portion.raw) {
+            notes.push(`portion=${metadata.portion.raw}`);
+        }
+        portionMultiplier = metadata.portion.multiplier || 1.0;
+    }
+
+    // Legacy quantity/brand (kept for backward compatibility)
+    if (metadata.quantity && !metadata.portion) {
+        notes.push(`qty=${metadata.quantity}`);
+    }
     if (metadata.brand) notes.push(`brand=${metadata.brand}`);
 
     // Sides are already in slots from extractItem
@@ -332,12 +374,16 @@ async function logFromNLU(message, parseResult) {
     if (slots.severity_note) notes.push(slots.severity_note);
     if (slots.bristol_note) notes.push(slots.bristol_note);
 
-    // Estimate calories for Peyton only
+    // Estimate calories for Peyton only (with portion multiplier)
     let caloriesVal = null;
     if (intent === 'food' && isPeyton) {
         try {
-            caloriesVal = await estimateCaloriesForItemAndSides(slots.item, slots.sides);
-            if (caloriesVal == null) {
+            const baseCalories = await estimateCaloriesForItemAndSides(slots.item, slots.sides);
+            if (baseCalories != null) {
+                // Apply portion multiplier
+                caloriesVal = Math.round(baseCalories * portionMultiplier);
+                console.log(`[CAL] Base: ${baseCalories} kcal × ${portionMultiplier.toFixed(2)} = ${caloriesVal} kcal`);
+            } else {
                 notes.push('calories=pending');
             }
         } catch (error) {
