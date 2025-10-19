@@ -20,27 +20,31 @@ function validateQuality(parseResult) {
 
     const item = slots.item || '';
 
-    // Check 1: Item too short (< 3 characters)
-    if (item.length > 0 && item.length < 3) {
+    // Check 1: Empty item for food/drink intent
+    if (!item || item.trim().length === 0) {
+        return {
+            isValid: false,
+            reason: `What did you have? Please tell me the food or drink.`
+        };
+    }
+
+    // Check 2: Item too short (< 2 characters) - very lenient
+    if (item.length < 2) {
         return {
             isValid: false,
             reason: `The item "${item}" seems too short. Can you provide more details?`
         };
     }
 
-    // Check 2: No noun detected in item
-    if (item.length > 0 && !hasNoun(item)) {
+    // Check 3: No noun detected - but be lenient (only reject obvious nonsense)
+    // Skip this check if item has common food words or is multi-word
+    const hasFoodWords = /egg|tea|coffee|milk|water|salad|pizza|rice|chicken|bacon|cereal|bread/i.test(item);
+    const isMultiWord = item.trim().split(/\s+/).length > 1;
+
+    if (!hasFoodWords && !isMultiWord && item.length > 0 && !hasNoun(item)) {
         return {
             isValid: false,
             reason: `I didn't catch what you ate/drank. Can you be more specific about the item?`
-        };
-    }
-
-    // Check 3: Empty item for food/drink intent
-    if (!item || item.trim().length === 0) {
-        return {
-            isValid: false,
-            reason: `What did you have? Please tell me the food or drink.`
         };
     }
 

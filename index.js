@@ -873,6 +873,22 @@ client.on('messageCreate', async (message) => {
 
 // Command handler functions
 async function handleFood(message, args) {
+    // Legacy command - redirect to NLU for modern handling
+    if (!args) {
+        return message.reply('Please tell me what you ate. Example: "had chicken salad for lunch"');
+    }
+
+    // Create a synthetic message object for NLU
+    const syntheticMessage = {
+        ...message,
+        content: args // Use the args as the content
+    };
+
+    await handleNaturalLanguage(syntheticMessage);
+}
+
+async function handleFood_LEGACY_DISABLED(message, args) {
+    // LEGACY CODE - Disabled in favor of NLU system
     if (!args) {
         return message.reply('Please specify what you ate. Example: `!food chicken salad`');
     }
