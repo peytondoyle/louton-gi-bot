@@ -1,9 +1,17 @@
 /**
  * SQLite Persistent Cache Bridge
  * Optional: Survives restarts for frequently-accessed data
+ * Note: Disabled if better-sqlite3 not available (Node 24 compatibility issue)
  */
 
-const Database = require('better-sqlite3');
+let Database;
+try {
+    Database = require('better-sqlite3');
+} catch (e) {
+    console.log('[SQLITE] better-sqlite3 not available (optional dependency)');
+    Database = null;
+}
+
 const path = require('path');
 const fs = require('fs');
 
@@ -17,6 +25,11 @@ let db = null;
  * Initialize SQLite database
  */
 function init() {
+    if (!Database) {
+        console.log('[SQLITE] Skipping initialization (better-sqlite3 not available)');
+        return;
+    }
+
     try {
         // Ensure .data directory exists
         fs.mkdirSync(path.dirname(DB_PATH), { recursive: true });
