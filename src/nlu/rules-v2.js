@@ -179,6 +179,23 @@ function rulesParse(text, options = {}) {
         return result;
     }
 
+    // Utility Intent Detection
+    const UTILITY_INTENTS = {
+        'help': [/^(help|what can you do|show commands|howto)/i],
+        'undo': [/^(undo|delete that|remove last|that was a mistake|oops)/i],
+        'settings': [/^(settings|reminders|timezone|dnd|snooze|goal)/i]
+    };
+
+    for (const [intent, patterns] of Object.entries(UTILITY_INTENTS)) {
+        if (patterns.some(p => p.test(t))) {
+            result.intent = intent;
+            result.confidence = 0.95;
+            result.slots.query = originalText;
+            return result;
+        }
+    }
+
+
     // Negation check (skip, no, avoided)
     if (hasNegation(cleanedText)) {
         if (/\b(skip|avoided|didn't\s+have|no\s+\w+\s+today)\b/i.test(t)) {

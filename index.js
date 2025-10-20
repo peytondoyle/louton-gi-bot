@@ -144,28 +144,8 @@ const RESPONSES = {
     ]
 };
 
-// Command handlers
-const commands = {
-    '!food': handleFood,
-    '!symptom': handleSymptom,
-    '!bm': handleBM,
-    '!reflux': handleReflux,
-    '!drink': handleDrink,
-    '!help': handleHelpPalette,        // Command Palette (interactive)
-    '!palette': handleHelpPalette,     // Alias
-    '!commands': handleHelpPalette,    // Alias
-    '!howto': handleHowto,
-    '!undo': handleUndo,
-    '!goal': handleGoal,
-    '!reminders': handleReminders,
-    '!dnd': handleDND,
-    '!timezone': handleTimezone,
-    '!snooze': handleSnooze,
-    '!nlu-stats': handleNLUStats,
-    '!chart': (msg, args) => handleChart(msg, args, { googleSheets, getUserPrefs, getLogSheetNameForUser: googleSheets.getLogSheetNameForUser, PEYTON_ID }),
-    '!charts': handleChartsMenu,
-    '!test': handleTest
-};
+// The command object is now deprecated and will be removed.
+// All functionality is handled by the NLU router.
 
 // Add raw event debug listener
 client.on('raw', (packet) => {
@@ -402,6 +382,24 @@ async function handleNaturalLanguage(message) {
         // Handle the question intent
         if (result.intent === 'question') {
             await handleQuestion(message, result.slots.query);
+            return;
+        }
+
+        // Handle utility intents
+        if (result.intent === 'help') {
+            // Modify the message content to be empty for the palette
+            const syntheticMessage = { ...message, content: '' };
+            await handleHelpPalette(syntheticMessage);
+            return;
+        }
+        if (result.intent === 'undo') {
+            await handleUndo(message);
+            return;
+        }
+        if (result.intent === 'settings') {
+            // For now, route all settings-related queries to the reminders handler.
+            // This can be expanded later to be more specific.
+            await handleReminders(message, result.slots.query);
             return;
         }
 
@@ -1028,62 +1026,14 @@ client.on('messageCreate', async (message) => {
             return; // Silently ignore messages from other channels
         }
 
-        // Log routing decision
-        const route = isCommand ? 'COMMAND' : 'NLU';
-        console.log(`\n[ROUTER] 📨 From: ${message.author.username} | isDM=${isDM} | hasPrefix=${hasPrefix} | Route: ${route}`);
-        console.log(`[ROUTER] 📝 Content: "${content}"`);
-
-        // ========== ROUTE 1: Not a command = NLU ==========
-        if (!isCommand) {
-            console.log('[ROUTER] ✅ Routing to NLU handler');
-            try {
-                await handleNaturalLanguage(message);
-            } catch (nluError) {
-                // handleNaturalLanguage should never throw (handles errors internally)
-                // If it does, log but don't send duplicate error
-                console.error('[ROUTER] Unexpected NLU error (already handled internally):', nluError);
-            }
-            return;
+        // All non-bot messages are now routed through the NLU handler.
+        // The NLU handler will decide if it's a log, question, or utility command.
+        try {
+            await handleNaturalLanguage(message);
+        } catch (nluError) {
+            console.error('[ROUTER] Unexpected NLU error:', nluError);
         }
-
-        // ========== ROUTE 2: Prefixed = Command ==========
-        if (isCommand && hasPrefix) {
-            console.log('[ROUTER] ✅ Routing to command handler');
-
-            // Parse command and args
-            const args = content.slice(1).split(/\s+/);
-            const command = args[0].toLowerCase();
-            const commandArgs = args.slice(1).join(' ');
-
-            console.log(`[ROUTER] 🔍 Command: "${command}" | Args: "${commandArgs}"`);
-
-            // Route to command handler
-            if (commands[`!${command}`]) {
-                await commands[`!${command}`](message, commandArgs);
-                console.log(`[ROUTER] ✅ Command !${command} completed`);
-            } else {
-                console.log(`[ROUTER] ❌ Unknown command: !${command}`);
-                await message.reply({
-                    content: `❌ Unknown command \`!${command}\`.\n\n💡 **Try:**\n` +
-                            `• \`!help\` - Open the interactive Command Palette\n` +
-                            `• \`!howto\` - Beginner walkthrough\n` +
-                            `• Or just talk naturally: "had pizza for lunch"`
-                });
-            }
-            return;
-        }
-
-        // ========== ROUTE 3: Channel + No Prefix = Try NLU if allowed ==========
-        // This route is now covered by the main NLU route.
-        // if (isAllowedChannel && !isCommand) {
-        //     console.log('[ROUTER] ✅ Routing channel message to NLU handler');
-        //     await handleNaturalLanguage(message);
-        //     return;
-        // }
-
-        // ========== ROUTE 4: Everything else = Ignore ==========
-        console.log('[ROUTER] ⚠️ Message ignored (no matching route)');
-
+        
     } catch (err) {
         console.error('[ROUTER] ❌ Error in messageCreate handler:', err);
         // DO NOT send error to user - specific handlers already did
@@ -1093,347 +1043,24 @@ client.on('messageCreate', async (message) => {
 });
 
 // Command handler functions
-async function handleFood(message, args) {
-    // Legacy command - redirect to NLU for modern handling
-    if (!args) {
-        return message.reply('Please tell me what you ate. Example: "had chicken salad for lunch"');
-    }
-
-    // Create a synthetic message object for NLU
-    const syntheticMessage = {
-        ...message,
-        content: args // Use the args as the content
-    };
-
-    await handleNaturalLanguage(syntheticMessage);
-}
-
-async function handleFood_LEGACY_DISABLED(message, args) {
-    // LEGACY CODE - Disabled in favor of NLU system
-    if (!args) {
-        return message.reply('Please specify what you ate. Example: `!food chicken salad`');
-    }
-
+async function handleUndo(message) { // Removed 'args' from signature
+    const userId = message.author.id;
     const userName = getUserName(message.author.username);
-    const timestamp = moment().tz(TIMEZONE).format('YYYY-MM-DD HH:mm:ss');
-    const source = !message.guild ? 'DM' : 'Channel';
+    const sheetName = googleSheets.getLogSheetNameForUser(userId);
 
-    // Categorize the food
-    const category = NLPHandler.categorizeItem('food', args);
+    try {
+        const result = await googleSheets.undoLastEntry(userName, sheetName);
 
-    // Check for trigger foods
-    const foodLower = args.toLowerCase();
-    let reaction = '✅';
-    let response = RESPONSES.general[Math.floor(Math.random() * RESPONSES.general.length)];
-
-    if (category === 'Safe Food' || TRIGGER_ITEMS.positive.some(item => foodLower.includes(item))) {
-        reaction = '💪';
-        response = RESPONSES.positive[Math.floor(Math.random() * RESPONSES.positive.length)];
-    } else if (category === 'Trigger Food' || TRIGGER_ITEMS.warning.some(item => foodLower.includes(item)) || TRIGGER_ITEMS.problematic.some(item => foodLower.includes(item))) {
-        reaction = '⚠️';
-        response = RESPONSES.warning[Math.floor(Math.random() * RESPONSES.warning.length)];
+        if (result.success) {
+            await message.react('↩️');
+            await message.reply(`✅ ${result.message}`);
+        } else {
+            await message.reply(`❌ ${result.message}`);
+        }
+    } catch (error) {
+        console.error('Error undoing entry:', error);
+        await message.reply('❌ Failed to undo last entry. Please try again.');
     }
-
-    // Log to Google Sheets
-    await googleSheets.appendRow({
-        timestamp,
-        user: userName,
-        type: 'food',
-        value: args,
-        severity: null,
-        category: category,
-        notes: null,
-        source: source
-    });
-
-    // React and respond
-    await message.react(reaction);
-    await message.reply(`${response}\n📝 Logged: **${args}** (${category})`);
-}
-
-async function handleDrink(message, args) {
-    // Legacy command - redirect to NLU
-    if (!args) {
-        return message.reply('Please tell me what you drank. Example: "had chai with oat milk"');
-    }
-    await handleNaturalLanguage({ ...message, content: args });
-}
-
-async function handleDrink_LEGACY_DISABLED(message, args) {
-    if (!args) {
-        return message.reply('Please specify what you drank. Example: `!drink chai with oat milk`');
-    }
-
-    const userName = getUserName(message.author.username);
-    const timestamp = moment().tz(TIMEZONE).format('YYYY-MM-DD HH:mm:ss');
-    const source = !message.guild ? 'DM' : 'Channel';
-
-    // Categorize the drink
-    const category = NLPHandler.categorizeItem('drink', args);
-
-    // Check for trigger drinks
-    const drinkLower = args.toLowerCase();
-    let reaction = '✅';
-    let response = RESPONSES.general[Math.floor(Math.random() * RESPONSES.general.length)];
-
-    if (category === 'Safe Drink' || drinkLower.includes('chai') || drinkLower.includes('water') || drinkLower.includes('tea')) {
-        reaction = '💪';
-        response = RESPONSES.positive[Math.floor(Math.random() * RESPONSES.positive.length)];
-    } else if (category === 'Trigger Drink' || drinkLower.includes('refresher') || drinkLower.includes('coffee') || drinkLower.includes('alcohol')) {
-        reaction = '⚠️';
-        response = RESPONSES.warning[Math.floor(Math.random() * RESPONSES.warning.length)];
-    }
-
-    // Log to Google Sheets
-    await googleSheets.appendRow({
-        timestamp,
-        user: userName,
-        type: 'drink',
-        value: args,
-        severity: null,
-        category: category,
-        notes: null,
-        source: source
-    });
-
-    // React and respond
-    await message.react(reaction);
-    await message.reply(`${response}\n🥤 Logged: **${args}** (${category})`);
-}
-
-async function handleSymptom(message, args) {
-    // Legacy command - redirect to NLU
-    if (!args) {
-        return message.reply('Please tell me how you\'re feeling. Example: "stomach pain" or "mild heartburn"');
-    }
-    await handleNaturalLanguage({ ...message, content: args });
-}
-
-async function handleSymptom_LEGACY_DISABLED(message, args) {
-    if (!args) {
-        return message.reply('Please describe your symptom. Example: `!symptom stomach pain mild`');
-    }
-
-    const userName = getUserName(message.author.username);
-    const timestamp = moment().tz(TIMEZONE).format('YYYY-MM-DD HH:mm:ss');
-    const source = !message.guild ? 'DM' : 'Channel';
-
-    // Parse severity from the message
-    const severityMatch = args.match(/\b(mild|moderate|severe|1-10|\d+)\b/i);
-    let severity = severityMatch ? severityMatch[0] : 'moderate';
-
-    // Remove severity from the symptom description
-    const symptomDescription = args.replace(/\b(mild|moderate|severe|1-10|\d+)\b/i, '').trim();
-
-    // Log to Google Sheets
-    await googleSheets.appendRow({
-        timestamp,
-        user: userName,
-        type: 'symptom',
-        value: symptomDescription,
-        severity: severity,
-        category: 'Symptom',
-        notes: null,
-        source: source
-    });
-
-    const response = RESPONSES.symptom[Math.floor(Math.random() * RESPONSES.symptom.length)];
-
-    // React and respond
-    await message.react('💙');
-    await message.reply(`${response}\n🩺 Logged: **${symptomDescription}** (Severity: ${severity})`);
-}
-
-async function handleBM(message, args) {
-    // Legacy command - redirect to NLU
-    const text = args || 'had a bowel movement';
-    await handleNaturalLanguage({ ...message, content: text });
-}
-
-async function handleBM_LEGACY_DISABLED(message, args) {
-    const userName = getUserName(message.author.username);
-    const timestamp = moment().tz(TIMEZONE).format('YYYY-MM-DD HH:mm:ss');
-    const source = !message.guild ? 'DM' : 'Channel';
-
-    // Bristol scale or description
-    const description = args || 'normal';
-
-    // Log to Google Sheets
-    await googleSheets.appendRow({
-        timestamp,
-        user: userName,
-        type: 'bm',
-        value: description,
-        severity: null,
-        category: 'Bowel Movement',
-        notes: null,
-        source: source
-    });
-
-    // React and respond
-    await message.react('📝');
-    await message.reply(`Logged BM: **${description}**\n💡 Remember: Consistency in tracking helps identify patterns!`);
-}
-
-async function handleReflux(message, args) {
-    // Legacy command - redirect to NLU
-    const text = args ? `reflux ${args}` : 'reflux';
-    await handleNaturalLanguage({ ...message, content: text });
-}
-
-async function handleReflux_LEGACY_DISABLED(message, args) {
-    const userName = getUserName(message.author.username);
-    const timestamp = moment().tz(TIMEZONE).format('YYYY-MM-DD HH:mm:ss');
-    const source = !message.guild ? 'DM' : 'Channel';
-
-    // Parse severity
-    const severityMatch = args.match(/\b(mild|moderate|severe|1-10|\d+)\b/i);
-    let severity = severityMatch ? severityMatch[0] : 'moderate';
-
-    // Log to Google Sheets
-    await googleSheets.appendRow({
-        timestamp,
-        user: userName,
-        type: 'reflux',
-        value: 'reflux episode',
-        severity: severity,
-        category: 'Symptom',
-        notes: args,
-        source: source
-    });
-
-    // React and respond
-    await message.react('🔥');
-    await message.reply(`Logged reflux episode (Severity: ${severity})\n💊 Remember to take any prescribed medications and avoid trigger foods.`);
-}
-
-async function handleHelp(message) {
-    const embed = new EmbedBuilder()
-        .setColor(0x0099FF)
-        .setTitle('📋 Louton GI Bot - All Commands')
-        .setDescription('**Preferred:** Just talk naturally! Or use commands below.')
-        .addFields(
-            {
-                name: '✨ Natural Language (Recommended)',
-                value: 'Just tell me what you ate or how you feel:\n' +
-                       '• "had pizza for lunch"\n' +
-                       '• "drinking oat milk latte"\n' +
-                       '• "mild heartburn"\n' +
-                       '• "bad poop this morning"',
-                inline: false
-            },
-            {
-                name: '📊 Daily Summaries',
-                value: '`!today` - Compact daily overview\n' +
-                       '`!week` - Weekly summary\n' +
-                       '`!insights` - Deep analytics (budget, trends, combos, streaks)\n' +
-                       '`!patterns` - Pattern analysis\n' +
-                       '`!triggers` - Trigger correlations\n' +
-                       '`!trends` - Trend analysis\n' +
-                       '`!streak` - Symptom-free streak\n' +
-                       '`!weekly` - Weekly digest',
-                inline: false
-            },
-            {
-                name: '⚙️ Settings & Control',
-                value: '`!reminders` - Manage reminder settings\n' +
-                       '`!dnd 22:00-07:00` - Set quiet hours\n' +
-                       '`!dnd off` - Disable quiet hours\n' +
-                       '`!timezone America/New_York` - Set timezone\n' +
-                       '`!snooze 3h` - Temporarily pause reminders\n' +
-                       '`!goal [number]` - Set daily calorie goal',
-                inline: false
-            },
-            {
-                name: '🔧 Utilities',
-                value: '`!undo` - Remove last entry\n' +
-                       '`!howto` - Interactive walkthrough\n' +
-                       '`!help` - This help menu\n' +
-                       '`!nlu-stats` - NLU performance metrics\n' +
-                       '`!test` - Test bot connection',
-                inline: false
-            },
-            {
-                name: '💡 Pro Tips',
-                value: '• The bot understands natural language - no need for commands!\n' +
-                       '• After logging, use quick buttons: Add portion, Add brand, Add photo, Undo\n' +
-                       '• I ignore greetings like "thanks", "lol", "good morning"\n' +
-                       '• Your data is private in your own tab',
-                inline: false
-            }
-        )
-        .setFooter({ text: 'Type !howto for a beginner-friendly walkthrough' });
-
-    await message.reply({ embeds: [embed] });
-}
-
-async function handleHowto(message) {
-    const embed = new EmbedBuilder()
-        .setColor(0x9B59B6)
-        .setTitle('🎯 How to Use Louton GI Bot')
-        .setDescription('A beginner-friendly walkthrough!')
-        .addFields(
-            {
-                name: '1️⃣ Just Talk to Me (Natural Language)',
-                value:
-                    '**No commands needed!** Just say:\n' +
-                    '• "had egg bite and jasmine tea for breakfast"\n' +
-                    '• "2 slices pizza with pepperoni"\n' +
-                    '• "mild heartburn"\n' +
-                    '• "hard poop this morning"\n\n' +
-                    'I understand natural language and log automatically!',
-                inline: false
-            },
-            {
-                name: '2️⃣ Quick Actions (Buttons)',
-                value:
-                    'After logging, tap buttons to add details:\n' +
-                    '📏 **Add portion** - "1 cup", "2 slices", "grande"\n' +
-                    '🏷️ **Add brand** - "Oatly Barista", "Cheerios"\n' +
-                    '📸 **Add photo** - Upload meal pictures\n' +
-                    '↩️ **Undo** - Remove entry (60-sec window)',
-                inline: false
-            },
-            {
-                name: '3️⃣ View Your Data',
-                value:
-                    '`!today` - Today\'s summary (reflux, trends)\n' +
-                    '`!insights` - Analytics (latency, patterns, streaks)\n' +
-                    '`!week` - Weekly overview\n' +
-                    '`!streak` - Symptom-free days',
-                inline: false
-            },
-            {
-                name: '4️⃣ Manage Reminders',
-                value:
-                    '`!reminders` - Turn reminders on/off\n' +
-                    '`!dnd 22:00-07:00` - Set quiet hours\n' +
-                    '`!snooze 3h` - Pause reminders temporarily\n' +
-                    '`!timezone America/New_York` - Set your timezone',
-                inline: false
-            },
-            {
-                name: '5️⃣ Fix Mistakes',
-                value:
-                    '• Click **Undo** button (within 60 seconds)\n' +
-                    '• Type `!undo` to remove last entry\n' +
-                    '• Type `correction: [new text]` to fix details',
-                inline: false
-            },
-            {
-                name: '💡 Good to Know',
-                value:
-                    '• Greetings ("thanks", "lol") won\'t create logs\n' +
-                    '• Be specific: "2 slices" or "grande" helps tracking\n' +
-                    '• I learn patterns to identify triggers\n' +
-                    '• All your data is private in your tab\n' +
-                    '• Type `!help` for complete command list',
-                inline: false
-            }
-        )
-        .setFooter({ text: 'Tip: Natural language works best! Just tell me what happened.' });
-
-    await message.reply({ embeds: [embed] });
 }
 
 async function handleGoal(message, args) {
@@ -1471,16 +1098,14 @@ async function handleGoal(message, args) {
 async function handleReminders(message, args) {
     const userId = message.author.id;
 
-    if (!args || args.trim() === '') {
+    if (!args || args.trim() === '' || args.trim().toLowerCase() === 'reminders' || args.trim().toLowerCase() === 'settings') {
         return message.reply(
             '🔔 **Reminder Settings**\n\n' +
-            '**Usage:**\n' +
-            '• `!reminders on` - Enable reminders\n' +
-            '• `!reminders off` - Disable reminders\n' +
-            '• `!reminders time 08:00` - Set morning check-in\n' +
-            '• `!reminders evening 20:30` - Set evening recap\n' +
-            '• `!reminders inactivity 14:00` - Set inactivity nudge\n\n' +
-            '_Blank time to disable: `!reminders evening`_'
+            '**Usage:** (Just say what you want!)\n' +
+            '• "turn reminders on"\n' +
+            '• "set my morning check-in for 8am"\n' +
+            '• "disable the evening recap"\n' +
+            '• "change my timezone to America/New_York"'
         );
     }
 
