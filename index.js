@@ -580,6 +580,7 @@ async function logFromNLU(message, parseResult) {
     const userId = message.author.id;
     const userTag = message.author.tag;
     const isPeyton = (userId === PEYTON_ID);
+    const sheetName = googleSheets.getLogSheetNameForUser(userId);
 
     // ========== BUILD APPEND PAYLOAD ==========
     const { buildNotesFromParse } = require('./src/utils/notesBuild');
@@ -667,17 +668,11 @@ async function logFromNLU(message, parseResult) {
     let caloriesVal = null;
     if (intent === 'food' && isPeyton) {
         try {
-            const baseCalories = await estimateCaloriesForItemAndSides(slots.item, slots.sides);
-            if (baseCalories != null) {
-                // Apply portion multiplier
-                caloriesVal = Math.round(baseCalories * portionMultiplier);
-                console.log(`[CAL] Base: ${baseCalories} kcal × ${portionMultiplier.toFixed(2)} = ${caloriesVal} kcal`);
-            } else {
-                notes.push('calories=pending');
-            }
-        } catch (error) {
-            console.error('[CAL] Error estimating calories:', error);
-            notes.push('calories=pending');
+            caloriesVal = await estimateCaloriesForItemAndSides(slots.item, slots.sides);
+        } catch (e) {
+            console.error(`[CAL-EST] CRITICAL: Calorie estimation failed unexpectedly for "${slots.item}". Error: ${e.message}`);
+            // Do not re-throw. Proceed with logging, calories will be null.
+            caloriesVal = null;
         }
     } else if (intent === 'food' && !isPeyton) {
         // Louis: explicitly no calorie tracking
