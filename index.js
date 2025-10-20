@@ -54,6 +54,7 @@ const ProactiveScheduler = require('./src/scheduler/proactiveScheduler');
 
 // Calorie estimation
 const { estimateCaloriesForItemAndSides } = require('./src/nutrition/estimateCalories');
+const { getSheetName } = require('./src/utils/getSheetName');
 
 // Reminders & preferences
 const { scheduleAll, updateUserSchedule } = require('./src/scheduler/reminders');
@@ -292,6 +293,7 @@ async function handleNaturalLanguage(message) {
     const text = message.content.trim();
     const userId = message.author.id;
     const userTag = message.author.tag;
+    let saveSucceeded = false;
 
     // --- DIALOG MANAGER ---
     // If a dialog is active, route the message to the manager and stop further processing.
