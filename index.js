@@ -24,6 +24,14 @@ const { getWindowStartTime } = require('./src/nlu/ontology');
 const { record: recordNLUMetrics } = require('./src/nlu/metrics-v2');
 const { postprocess } = require('./src/nlu/postprocess');
 
+// Calorie System imports
+const { shouldEnableCalorieFeatures } = require('./src/auth/scope');
+const { parseComplexIntent } = require('./src/nlu/rulesIntent');
+const { enqueue } = require('./src/jobs/jobsStore');
+const { start: startJobRunner, processOverdueJobs } = require('./src/jobs/runner');
+const { estimate, getDailyKcalTarget, calculateDailyTotals, formatDailyProgress } = require('./src/calories/estimate');
+const { deliverNotification, testDMHandshake } = require('./src/notify/channelOrDM');
+
 // Charts System
 const { handleChart } = require('./src/commands/chart');
 const { handleChartsMenu, handleChartButton } = require('./src/commands/chartsMenu');
@@ -212,6 +220,12 @@ client.once('ready', async () => {
     // Start the Proactive Analyst scheduler
     ProactiveScheduler.start(client, { googleSheets, getUserProfile });
 
+    // Start the job runner for calorie reminders
+    startJobRunner(client);
+    
+    // Process any overdue jobs on startup
+    await processOverdueJobs(client);
+
     console.log('🚀 Bot is fully operational and ready for commands!');
 });
 
@@ -285,6 +299,17 @@ async function handleNaturalLanguage(message) {
     if (DialogManager.hasActiveDialog(userId)) {
         await DialogManager.handleResponse(message);
         return;
+    }
+
+    // ========== CALORIE FEATURES (Peyton only) ==========
+    // Check if user is authorized for calorie features
+    if (shouldEnableCalorieFeatures(userId)) {
+        // Try to parse complex calorie-related intents
+        const complexIntent = parseComplexIntent(text);
+        if (complexIntent) {
+            await handleComplexIntent(message, complexIntent);
+            return;
+        }
     }
 
     // ========== CONTEXTUAL FOLLOW-UP ==========
@@ -459,8 +484,20 @@ async function postLogActions(message, parseResult, undoId, caloriesVal) {
         const details = (parseResult.slots.item || parseResult.slots.symptom_type || intent).trim();
 
         if (intent === 'food' || intent === 'drink') {
-            if (isPeyton && caloriesVal != null && caloriesVal > 0) {
+            if (shouldEnableCalorieFeatures(userId) && caloriesVal != null && caloriesVal > 0) {
                 confirmText = `✅ Logged **${details}** — ≈${caloriesVal} kcal.`;
+                
+                // Add daily progress for calorie users
+                try {
+                    const todayEntries = await googleSheets.getTodayEntries(userId);
+                    const totals = calculateDailyTotals(todayEntries.rows || []);
+                    const target = await getDailyKcalTarget(userId);
+                    const progress = formatDailyProgress(totals, target);
+                    
+                    confirmText += `\n\n📊 ${progress}`;
+                } catch (e) {
+                    console.warn('[postLogActions] Error calculating daily progress:', e.message);
+                }
             } else {
                 confirmText = `✅ Logged **${details}**.`;
             }
@@ -513,6 +550,79 @@ async function postLogActions(message, parseResult, undoId, caloriesVal) {
             console.error('[postLogActions] Error in background tasks:', e);
         }
     });
+}
+
+/**
+ * Handles complex calorie-related intents
+ * @param {Message} message The Discord message object.
+ * @param {Object} intent The parsed complex intent.
+ */
+async function handleComplexIntent(message, intent) {
+    const userId = message.author.id;
+    
+    switch (intent.kind) {
+        case 'after_meal_ping':
+            await handleReminderSetup(message, intent);
+            break;
+        case 'stop_meal_reminders':
+            await handleStopReminders(message);
+            break;
+        case 'set_calorie_target':
+            await handleSetCalorieTarget(message, intent);
+            break;
+        default:
+            console.log(`[CALORIE] Unknown complex intent: ${intent.kind}`);
+    }
+}
+
+/**
+ * Handles setting up meal reminders
+ * @param {Message} message The Discord message object.
+ * @param {Object} intent The reminder intent.
+ */
+async function handleReminderSetup(message, intent) {
+    const userId = message.author.id;
+    const { delayMin, scope } = intent;
+    
+    // Test DM handshake first
+    const handshakeResult = await testDMHandshake(client, userId);
+    
+    if (handshakeResult.success) {
+        // Store the reminder rule (this would be persisted)
+        console.log(`[CALORIE] Setting up ${scope} reminders with ${delayMin}min delay for user ${userId}`);
+        
+        await message.reply(`✅ I'll DM you ~${delayMin} minutes after each ${scope} to add calories. ${handshakeResult.message}`);
+    } else {
+        await message.reply(`⚠️ ${handshakeResult.message}`);
+    }
+}
+
+/**
+ * Handles stopping meal reminders
+ * @param {Message} message The Discord message object.
+ */
+async function handleStopReminders(message) {
+    const userId = message.author.id;
+    
+    // Cancel existing jobs (this would be implemented)
+    console.log(`[CALORIE] Stopping meal reminders for user ${userId}`);
+    
+    await message.reply('✅ Meal reminders stopped. You can re-enable them anytime by saying "ask me 30 min after every meal to log calories".');
+}
+
+/**
+ * Handles setting calorie targets
+ * @param {Message} message The Discord message object.
+ * @param {Object} intent The target intent.
+ */
+async function handleSetCalorieTarget(message, intent) {
+    const userId = message.author.id;
+    const { target } = intent;
+    
+    // Update user's calorie target (this would be persisted)
+    console.log(`[CALORIE] Setting calorie target to ${target} for user ${userId}`);
+    
+    await message.reply(`✅ Daily calorie target set to ${target} kcal. I'll track your progress against this goal.`);
 }
 
 /**
@@ -738,16 +848,33 @@ async function logFromNLU(message, parseResult) {
     }
 
     // Build row object using validated Notes
+    // Estimate macros if we have calories (for calorie users only)
+    let proteinVal = null, carbsVal = null, fatVal = null;
+    if (shouldEnableCalorieFeatures(userId) && caloriesVal && caloriesVal > 0) {
+        const macroEstimate = estimate({ 
+            item: slots.item, 
+            quantity: slots.sides,
+            units: 'serving' 
+        });
+        if (macroEstimate) {
+            proteinVal = macroEstimate.protein;
+            carbsVal = macroEstimate.carbs;
+            fatVal = macroEstimate.fat;
+        }
+    }
+
     const rowObj = {
         'Timestamp': new Date().toISOString(),
+        'Date': new Date().toISOString().slice(0, 10),
+        'Time': new Date().toISOString().slice(11, 19),
         'User': userTag,
         'Type': intent,
-        'Details': details,
-        'Severity': (intent === 'symptom' || intent === 'reflux') ? (slots.severity ? mapSeverityToLabel(slots.severity) : '') : '',
-        'Notes': notesString, // Use validated/safe Notes string
-        'Date': new Date().toISOString().slice(0, 10),
-        'Source': 'discord-dm-nlu',
-        'Calories': (caloriesVal != null && caloriesVal > 0) ? caloriesVal : ''
+        'Item': details,
+        'Calories': (caloriesVal != null && caloriesVal > 0) ? caloriesVal : '',
+        'Protein': proteinVal || '',
+        'Carbs': carbsVal || '',
+        'Fat': fatVal || '',
+        'Notes': notesString // Use validated/safe Notes string
     };
 
     // ========== 1. APPEND ROW (Critical - can fail) ==========

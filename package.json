@@ -3,11 +3,12 @@
   "version": "1.0.0",
   "description": "Louton GI Bot - Discord bot for tracking GI symptoms and food intake",
   "main": "index.js",
-  "scripts": {
-    "start": "node index.js",
-    "dev": "nodemon index.js",
-    "test:nlu": "node tests/nlu.test.js"
-  },
+    "scripts": {
+        "start": "node index.js",
+        "dev": "nodemon index.js",
+        "test:nlu": "node tests/nlu.test.js",
+        "test:calories": "node tests/calorie.test.js"
+    },
   "keywords": [
     "louton",
     "discord",

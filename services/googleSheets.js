@@ -17,18 +17,16 @@ class GoogleSheetsService {
         // Define the complete column schema
         this.columnSchema = [
             'Timestamp',
+            'Date',
+            'Time',
             'User',
             'Type',
-            'Details',
-            'Severity',
-            'Category',
-            'Meal_Type',
-            'Confidence',
-            'Follow_Up_Needed',
-            'Bristol_Scale',
-            'Notes',
-            'Date',
-            'Source'
+            'Item',
+            'Calories',
+            'Protein',
+            'Carbs',
+            'Fat',
+            'Notes'
         ];
 
         // Known trigger and safe items
