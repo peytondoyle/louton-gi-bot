@@ -1,6 +1,46 @@
 const { google } = require('googleapis');
 
 /**
+ * Locates a meal row in Google Sheets by reference.
+ * @param {object} googleSheets - The authenticated Google Sheets instance.
+ * @param {object} mealRef - The reference to the meal row: { tab: string, rowId?: number, timestampISO?: string, item?: string }.
+ * @returns {Promise<object|null>} The found row object (with _rawData.rowIndex) or null.
+ */
+async function getMealRowByRef(googleSheets, mealRef) {
+    if (!mealRef || !mealRef.tab) return null;
+
+    // 1) Use rowId if available and the Sheets adapter supports it
+    // For now, we'll fall back to timestamp lookup as googleSheets.getRowById is not exposed.
+    // if (mealRef.rowId) return googleSheets.getRowById(mealRef.tab, mealRef.rowId); 
+
+    // 2) Fallback: locate by Timestamp within ±2 min AND same Item (best effort)
+    const ts = new Date(mealRef.timestampISO);
+    if (!isFinite(ts.getTime())) return null; // Ensure timestamp is valid
+
+    try {
+        const allRows = await googleSheets.getRows({}, mealRef.tab); // Get all rows from the specified tab
+        const rows = allRows.rows || [];
+        const winMs = 2 * 60 * 1000; // 2 minutes window
+
+        const foundRow = rows.find(r => {
+            // Check item (case-insensitive) if available in mealRef
+            const itemMatch = mealRef.item ? (r.Item && r.Item.toLowerCase() === mealRef.item.toLowerCase()) : true;
+            
+            // Check timestamp within window
+            const rowTimestamp = new Date(r.Timestamp);
+            const timeMatch = isFinite(rowTimestamp.getTime()) && Math.abs(rowTimestamp.getTime() - ts.getTime()) <= winMs;
+
+            return itemMatch && timeMatch;
+        });
+
+        return foundRow || null;
+    } catch (error) {
+        console.error(`[getMealRowByRef] Error looking up meal by ref ${JSON.stringify(mealRef)}: ${error.message}`);
+        return null;
+    }
+}
+
+/**
  * Updates the Notes column of a specific meal row in Google Sheets.
  * The mealRef is an object containing { tab: string, rowId: number, timestampISO: string }.
  * @param {object} googleSheets - The authenticated Google Sheets instance.
@@ -9,59 +49,29 @@ const { google } = require('googleapis');
  * @returns {Promise<{ok: boolean, reason?: string, notes?: string}>} Result of the update operation.
  */
 async function updateMealNotes(googleSheets, mealRef, tokens) {
-    if (!mealRef || (!mealRef.rowId && !mealRef.timestampISO) || !mealRef.tab) {
-        console.error(`[updateMealNotes] Invalid mealRef: ${JSON.stringify(mealRef)}`);
-        return { ok: false, reason: 'NO_MEAL_REF' };
-    }
+    if (!mealRef?.tab) return { ok: false, reason: 'NO_MEAL_REF' };
 
+    const row = await getMealRowByRef(googleSheets, mealRef);
+    if (!row || !row._rawData || typeof row._rawData.rowIndex === 'undefined') return { ok: false, reason: 'MEAL_NOT_FOUND' };
+
+    const rowIndex = row._rawData.rowIndex + 1; // +1 because sheet rows are 1-indexed
+    const existing = (row.Notes ?? '').toString();
+    const parts = existing.split(';').map(s => s.trim()).filter(Boolean);
+    for (const t of tokens) if (!parts.includes(t)) parts.push(t);
+    const next = parts.join('; ');
+
+    // Assuming googleSheets.updateRow method exists or can be simulated
+    // For now, use direct API call as googleSheets.updateRow is not directly available
     try {
-        const sheetName = mealRef.tab;
-        let rowIndex = mealRef.rowId;
-        let currentNotes = '';
-
-        if (!rowIndex) {
-            // If rowId is not present, attempt to find the row by timestamp
-            const allRows = await googleSheets.getRows({}, sheetName);
-            const targetRow = allRows.rows.find(row => row.Timestamp === mealRef.timestampISO);
-            if (targetRow && targetRow._rawData && targetRow._rawData.rowIndex) {
-                rowIndex = targetRow._rawData.rowIndex + 1; // +1 because sheet rows are 1-indexed
-                currentNotes = targetRow.Notes || '';
-            } else {
-                console.warn(`[updateMealNotes] Meal row not found by timestamp for ${mealRef.timestampISO} in ${sheetName}.`);
-                return { ok: false, reason: 'MEAL_NOT_FOUND' };
-            }
-        } else {
-            // Get the current Notes value using rowId
-            const range = `${sheetName}!K${rowIndex}`; // Assuming Notes is column K
-            const response = await googleSheets.sheets.spreadsheets.values.get({
-                spreadsheetId: process.env.GOOGLE_SHEETS_ID,
-                range,
-            });
-            currentNotes = response.data.values && response.data.values[0] ? response.data.values[0][0] : '';
-        }
-
-        const parts = currentNotes
-            .split(';')
-            .map(s => s.trim())
-            .filter(Boolean);
-
-        for (const t of tokens) {
-            if (!parts.includes(t)) parts.push(t);
-        }
-
-        const nextNotes = parts.join('; ');
-
-        // Update the Notes column
-        const rangeToUpdate = `${sheetName}!K${rowIndex}`;
+        const rangeToUpdate = `${mealRef.tab}!K${rowIndex}`;
         await googleSheets.sheets.spreadsheets.values.update({
             spreadsheetId: process.env.GOOGLE_SHEETS_ID,
             range: rangeToUpdate,
             valueInputOption: 'USER_ENTERED',
-            resource: { values: [[nextNotes]] },
+            resource: { values: [[next]] },
         });
-
-        console.log(`[updateMealNotes] Successfully updated notes for meal ${sheetName}:${rowIndex} with: ${nextNotes}`);
-        return { ok: true, notes: nextNotes };
+        console.log(`[updateMealNotes] Successfully updated notes for meal ${mealRef.tab}:${rowIndex} with: ${next}`);
+        return { ok: true, notes: next };
     } catch (error) {
         console.error(`[updateMealNotes] Failed to update notes for meal ${JSON.stringify(mealRef)}: ${error.message}`);
         return { ok: false, reason: error.message };

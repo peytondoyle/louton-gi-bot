@@ -61,7 +61,7 @@ const { scheduleAll, updateUserSchedule } = require('./src/scheduler/reminders')
 const { scheduleContextualFollowups } = require('./src/handlers/contextualFollowups');
 const dndCommands = require('./src/commands/dnd');
 const { markInteracted, isUnderWatch } = require('./src/reminders/responseWatcher');
-const { updateMealNotes } = require('./src/utils/mealNotes');
+const { updateMealNotes, getMealRowByRef } = require('./src/utils/mealNotes');
 
 // Start keep-alive server for Replit deployment
 keepAlive();
@@ -404,18 +404,14 @@ async function handleNaturalLanguage(message) {
 
         // If intent is not loggable and not conversational, ask for clarification
         if (!LOGGABLE_INTENTS.includes(result.intent)) {
-            // It's not a loggable intent, and not a known conversational one.
-            // Let's check if it's a question before giving up.
-            if (result.intent !== 'question') {
-                // This is a potential trigger for a dialog if the intent is 'other' or low-confidence symptom
-                if (result.intent === 'symptom' && result.missing.length > 0) {
-                    const initialContext = { ...result.slots, tz }; // Pass timezone into the dialog
-                    await DialogManager.startDialog('symptom_log', message, initialContext);
-                    return;
-                }
-                await requestIntentClarification(message);
+            // This is a potential trigger for a dialog if the intent is 'other' or low-confidence symptom
+            if (result.intent === 'symptom' && result.missing.length > 0) {
+                const initialContext = { ...result.slots, tz }; // Pass timezone into the dialog
+                await DialogManager.startDialog('symptom_log', message, initialContext);
                 return;
             }
+            await requestIntentClarification(message);
+            return;
         }
 
         // Handle the question intent
@@ -537,8 +533,9 @@ async function postLogActions(message, parseResult, undoId, caloriesVal, rowObj)
 
             const mealRef = {
                 tab: sheetName,
-                rowId: rowId,
-                timestampISO: rowObj.Timestamp,
+                rowId: result?.rowId || null, // if your Sheets adapter returns one
+                timestampISO: rowObj.Timestamp,     // always include
+                item: rowObj.Item,                  // helpful for fallback lookup
             };
             
             // Set a pending context for post-meal check
@@ -1148,71 +1145,47 @@ function getTypeEmoji(type) {
     return emojiMap[type] || EMOJI.success;
 }
 
-/**
- * Handles replies to the "How are you feeling after that?" post-meal check.
- * @param {import('discord.js').Message} message The Discord message object.
- * @param {object} pendingCheck The pending context object for the post-meal check.
- */
 async function handlePostMealCheck(message, pendingCheck) {
-    const text = message.content.trim();
-    const userId = message.author.id;
+  const mealRef = pendingCheck?.mealRef;
+  const text = message.content.trim();
+  const userId = message.author.id;
 
-    const pos = /\b(solid|all good|pretty good|good|great|fine|okay|ok|no issues|no problem|felt fine|im fine)\b/i.test(text);
-    const negMatch = text.match(/\b(reflux|heartburn|nausea|bloat(?:ed|ing)?|gas(?:sy)?|cramp(?:s|ing)?|pain|burning|regurgitation|ugh|bad)\b/i);
-    const sevWord = (text.match(/\b(mild|moderate|severe)\b/i) || [])[1];
-    const sevNum = (text.match(/\b([1-9]|10)\b/) || [])[1];
+  const positive = /\b(solid|all good|pretty good|good|great|fine|ok|okay|no issues|felt fine|im fine)\b/i.test(text);
+  const neg = text.match(/\b(reflux|heartburn|nausea|bloat(?:ed|ing)?|gas(?:sy)?|cramp(?:s|ing)?|pain|burning|regurgitation|ugh|bad)\b/i);
+  const sevWord = (text.match(/\b(mild|moderate|severe)\b/i) || [])[1];
+  const sevNum = (text.match(/\b([1-9]|10)\b/) || [])[1];
 
-    // Helper to map severity words to numbers
-    const wordToSeverity = (word) => {
-        if (!word) return null;
-        switch (word.toLowerCase()) {
-            case 'none': return 0;
-            case 'mild': return 3;
-            case 'moderate': return 6;
-            case 'severe': return 9;
-            default: return null;
-        }
-    };
-
-    // If no negative keywords and a positive keyword is found
-    if (pos && !negMatch) {
-        console.log(`[POST_MEAL_CHECK] Positive response for meal ${pendingCheck.mealRef.tab}:${pendingCheck.mealRef.rowId}: ${text}`);
-        const mealRef = pendingCheck.mealRef;
-        if (mealRef) {
-            try {
-                await updateMealNotes(googleSheets, mealRef, ['after_effect=ok']);
-            } catch (e) {
-                console.warn('[POST_MEAL_CHECK] notes append failed:', e.message);
-            }
-        } else {
-            console.warn('[POST_MEAL_CHECK] Missing mealRef; skipping note update.');
-        }
-        await message.reply("Got it—no symptoms. ✅");
-        contextMemory.clearPendingContext(userId);
-        return;
+  // POSITIVE → never create a symptom row
+  if (positive && !neg) {
+    if (mealRef) {
+      try {
+        await updateMealNotes(googleSheets, mealRef, ['after_effect=ok']);
+      } catch (e) {
+        console.warn('[POST_MEAL_CHECK] notes append failed:', e);
+      }
+    } else {
+      console.warn('[POST_MEAL_CHECK] Missing mealRef; skipping note update.');
     }
+    await message.reply('Got it — no symptoms. ✅');
+    contextMemory.clearPendingContext(userId);
+    return;
+  }
 
-    // If a negative keyword is found
-    if (negMatch) {
-        console.log(`[POST_MEAL_CHECK] Negative response for meal ${pendingCheck.mealRef.tab}:${pendingCheck.mealRef.rowId}: ${text}`);
-        const severity = sevNum ? Number(sevNum) : wordToSeverity(sevWord);
-        if (severity !== null) {
-            const symptomType = negMatch[1].toLowerCase();
-            await logSymptomForMeal(userId, symptomType, severity, pendingCheck.mealRef.tab + ':' + pendingCheck.mealRef.rowId);
-            await message.reply(`Logged ${symptomType} (severity ${severity}).`);
-            contextMemory.clearPendingContext(userId);
-            return;
-        }
-    }
+  // NEGATIVE with severity → log symptom linked to meal
+  if (neg && (sevNum || sevWord)) {
+    const severity = sevNum ? Number(sevNum) : ({ mild:3, moderate:6, severe:9 }[sevWord.toLowerCase()] || 5);
+    await logSymptomForMeal(userId, neg[1].toLowerCase(), severity, mealRef ? `${mealRef.tab}:${mealRef.rowId}` : null);
+    await message.reply(`Logged ${neg[1]} (severity ${severity}).`);
+    contextMemory.clearPendingContext(userId);
+    return;
+  }
 
-    // If unclear or missing severity, ask once with buttons
-    console.log(`[POST_MEAL_CHECK] Unclear response for meal ${pendingCheck.mealRef.tab}:${pendingCheck.mealRef.rowId}: ${text}. Requesting clarification.`);
-    await message.reply({
-        content: `${EMOJI.thinking} Any symptoms to log?`,
-        components: buttonsSeverity(false, true) // Pass true to include 'None' button
-    });
-    // Update pending context to expect severity button click
-    contextMemory.setPendingContext(userId, 'post_meal_check_wait_severity', pendingCheck, 120); // 2 min TTL
+  // UNCLEAR → one targeted question
+  await message.reply({
+      content: `${EMOJI.thinking} Any symptoms to log?`,
+      components: buttonsSeverity(false, true)
+  });
+  contextMemory.setPendingContext(userId, 'post_meal_check_wait_severity', pendingCheck, 120);
 }
 
 /**
@@ -1220,14 +1193,19 @@ async function handlePostMealCheck(message, pendingCheck) {
  * @param {string} userId - The Discord user ID.
  * @param {string} symptomType - The type of symptom.
  * @param {number} severity - The severity of the symptom (1-10).
- * @param {string} mealId - The mealId (e.g., "Peyton:123") to link the symptom to.
+ * @param {string|null} mealRefString - The mealRef string (e.g., "Peyton:123") to link the symptom to, or null.
  */
-async function logSymptomForMeal(userId, symptomType, severity, mealId) {
+async function logSymptomForMeal(userId, symptomType, severity, mealRefString) {
     const userTag = (await client.users.fetch(userId)).tag; // Fetch user tag
     const sheetName = getSheetName(userId, userTag);
     const timestamp = new Date().toISOString();
     const date = timestamp.slice(0, 10);
     const time = timestamp.slice(11, 19);
+
+    const notesArray = [`notes_v=2.1`, `severity_map=${mapSeverityToLabel(severity)}`];
+    if (mealRefString) {
+        notesArray.push(`linked_meal=${mealRefString}`);
+    }
 
     const rowObj = {
         'Timestamp': timestamp,
@@ -1237,14 +1215,14 @@ async function logSymptomForMeal(userId, symptomType, severity, mealId) {
         'Type': 'symptom',
         'Item': symptomType,
         'Severity': severity,
-        'Notes': `notes_v=2.1; severity_map=${mapSeverityToLabel(severity)}; linked_meal=${mealId}`,
+        'Notes': notesArray.join('; '),
         'Calories': '',
         'Protein': '',
         'Carbs': '',
         'Fat': '',
     };
     await googleSheets.appendRowToSheet(sheetName, rowObj);
-    console.log(`[POST_MEAL_CHECK] Logged symptom ${symptomType} (severity ${severity}) linked to ${mealId}`);
+    console.log(`[POST_MEAL_CHECK] Logged symptom ${symptomType} (severity ${severity}) linked to ${mealRefString || 'no meal'}`);
 }
 
 // ========== END NLU SYSTEM HELPER FUNCTIONS ==========
