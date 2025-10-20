@@ -422,9 +422,9 @@ async function logFromNLU(message, parseResult) {
     const { buildNotesFromParse } = require('./src/utils/notesBuild');
 
     let notesString;
-    if (parseResult._validatedNotes) {
-        // Prefer validator's canonical string
-        notesString = parseResult._validatedNotes;
+    if (slots._validatedNotes) {
+        // Prefer validator's canonical string (stored in slots by postprocess)
+        notesString = slots._validatedNotes;
         console.log('[NOTES] Using validated Notes v2.1');
     } else {
         // Fallback: build from parse safely
