@@ -712,9 +712,6 @@ async function logFromNLU(message, parseResult) {
         'Calories': (caloriesVal != null && caloriesVal > 0) ? caloriesVal : ''
     };
 
-    // Get the correct sheet for this user
-    const sheetName = googleSheets.getLogSheetNameForUser(userId);
-
     // ========== 1. APPEND ROW (Critical - can fail) ==========
     const result = await googleSheets.appendRowToSheet(sheetName, rowObj);
 
