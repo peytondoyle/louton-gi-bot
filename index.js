@@ -284,6 +284,10 @@ async function handleTest(message) {
  * Handle natural language (non-command) messages
  */
 async function handleNaturalLanguage(message) {
+    // Ensure message has reply() method
+    const { ensureReply } = require('./src/utils/ensureReply');
+    message = ensureReply(message);
+
     const text = message.content.trim();
     const userId = message.author.id;
     const userTag = message.author.tag;
@@ -421,6 +425,7 @@ async function handleNaturalLanguage(message) {
 /**
  * Log entry from NLU parse result
  * @returns {Promise<boolean>} - True if save succeeded, false otherwise
+ * NEVER THROWS after successful append - all post-save work is fire-and-forget
  */
 async function logFromNLU(message, parseResult) {
     const { intent, slots } = parseResult;
@@ -428,16 +433,14 @@ async function logFromNLU(message, parseResult) {
     const userTag = message.author.tag;
     const isPeyton = (userId === PEYTON_ID);
 
-    // ========== V2.1: Use validated Notes or build safely ==========
+    // ========== BUILD APPEND PAYLOAD ==========
     const { buildNotesFromParse } = require('./src/utils/notesBuild');
 
     let notesString;
     if (slots._validatedNotes) {
-        // Prefer validator's canonical string (stored in slots by postprocess)
         notesString = slots._validatedNotes;
         console.log('[NOTES] Using validated Notes v2.1');
     } else {
-        // Fallback: build from parse safely
         notesString = buildNotesFromParse(parseResult);
         console.log('[NOTES] Built Notes from parse (fallback)');
     }
@@ -564,9 +567,7 @@ async function logFromNLU(message, parseResult) {
     // Get the correct sheet for this user
     const sheetName = googleSheets.getLogSheetNameForUser(userId);
 
-    // Log to Sheets using new method
-    let saveSucceeded = false;
-
+    // ========== 1. APPEND ROW (Critical - can fail) ==========
     const result = await googleSheets.appendRowToSheet(sheetName, rowObj);
 
     if (!result.success) {
@@ -574,21 +575,21 @@ async function logFromNLU(message, parseResult) {
         return false; // Save failed
     }
 
-    // Mark save as successful IMMEDIATELY
-    saveSucceeded = true;
     console.log(`[SAVE] ✅ Successfully appended to ${sheetName}`);
 
-    // ========== BUILD UNDO REFERENCE (Safe, with fallbacks) ==========
-    let rowIndex = result.rowIndex;
-    if (!rowIndex) {
-        try {
+    // ========== 2. POST-SAVE: WRAPPED TO NEVER THROW ==========
+    // Build undo reference safely
+    let rowIndex = result.rowIndex || 2;
+    try {
+        if (!result.rowIndex) {
             const rowsResult = await googleSheets.getRows({}, sheetName);
             rowIndex = rowsResult?.rows?.length ? rowsResult.rows.length + 1 : 2;
-        } catch (e) {
-            rowIndex = 2; // Safe fallback
-            console.warn('[UNDO] Could not determine row index, using fallback');
         }
+    } catch (e) {
+        console.warn('[UNDO] Could not determine row index, using default:', 2);
+        rowIndex = 2;
     }
+
     const undoId = `${sheetName}:${rowIndex}`;
 
     // ========== SEND SUCCESS MESSAGE (ALWAYS, even if chips fail) ==========
