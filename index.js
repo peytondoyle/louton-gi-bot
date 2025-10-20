@@ -458,7 +458,7 @@ async function handleNaturalLanguage(message) {
 
             if (saveSucceeded) {
                 // Fire and forget post-save actions
-                postLogActions(message, result, logResult.undoId, logResult.caloriesVal);
+                postLogActions(message, result, logResult.undoId, logResult.caloriesVal, logResult.rowObj);
             }
 
         } else {
@@ -488,7 +488,7 @@ async function handleNaturalLanguage(message) {
  * This includes sending confirmation messages, follow-ups, and background context updates.
  * This function should never throw an error.
  */
-async function postLogActions(message, parseResult, undoId, caloriesVal) {
+async function postLogActions(message, parseResult, undoId, caloriesVal, rowObj) {
     const { intent, slots } = parseResult;
     const userId = message.author.id;
     const isPeyton = (userId === PEYTON_ID);
@@ -531,9 +531,19 @@ async function postLogActions(message, parseResult, undoId, caloriesVal) {
     if (intent === 'food' || intent === 'drink') {
         try {
             await message.channel.send("How are you feeling after that?");
+            // Extract sheetName and rowIndex from undoId
+            const [sheetName, rowIndexStr] = undoId.split(':');
+            const rowId = parseInt(rowIndexStr, 10);
+
+            const mealRef = {
+                tab: sheetName,
+                rowId: rowId,
+                timestampISO: rowObj.Timestamp,
+            };
+            
             // Set a pending context for post-meal check
             contextMemory.setPendingContext(userId, 'post_meal_check', {
-                meal_id: undoId // Link to the logged meal
+                mealRef: mealRef // Link to the logged meal
             }, 120); // 2 minute TTL for follow-up
         } catch (e) {
             console.warn('[postLogActions] Error sending follow-up question:', e.message);
@@ -1166,9 +1176,17 @@ async function handlePostMealCheck(message, pendingCheck) {
 
     // If no negative keywords and a positive keyword is found
     if (pos && !negMatch) {
-        console.log(`[POST_MEAL_CHECK] Positive response for meal ${pendingCheck.meal_id}: ${text}`);
-        // Append a token to the meal's Notes: after_effect=ok
-        await updateMealNotes(pendingCheck.meal_id, 'after_effect=ok', googleSheets);
+        console.log(`[POST_MEAL_CHECK] Positive response for meal ${pendingCheck.mealRef.tab}:${pendingCheck.mealRef.rowId}: ${text}`);
+        const mealRef = pendingCheck.mealRef;
+        if (mealRef) {
+            try {
+                await updateMealNotes(googleSheets, mealRef, ['after_effect=ok']);
+            } catch (e) {
+                console.warn('[POST_MEAL_CHECK] notes append failed:', e.message);
+            }
+        } else {
+            console.warn('[POST_MEAL_CHECK] Missing mealRef; skipping note update.');
+        }
         await message.reply("Got it—no symptoms. ✅");
         contextMemory.clearPendingContext(userId);
         return;
@@ -1176,11 +1194,11 @@ async function handlePostMealCheck(message, pendingCheck) {
 
     // If a negative keyword is found
     if (negMatch) {
-        console.log(`[POST_MEAL_CHECK] Negative response for meal ${pendingCheck.meal_id}: ${text}`);
+        console.log(`[POST_MEAL_CHECK] Negative response for meal ${pendingCheck.mealRef.tab}:${pendingCheck.mealRef.rowId}: ${text}`);
         const severity = sevNum ? Number(sevNum) : wordToSeverity(sevWord);
         if (severity !== null) {
             const symptomType = negMatch[1].toLowerCase();
-            await logSymptomForMeal(userId, symptomType, severity, pendingCheck.meal_id);
+            await logSymptomForMeal(userId, symptomType, severity, pendingCheck.mealRef.tab + ':' + pendingCheck.mealRef.rowId);
             await message.reply(`Logged ${symptomType} (severity ${severity}).`);
             contextMemory.clearPendingContext(userId);
             return;
@@ -1188,7 +1206,7 @@ async function handlePostMealCheck(message, pendingCheck) {
     }
 
     // If unclear or missing severity, ask once with buttons
-    console.log(`[POST_MEAL_CHECK] Unclear response for meal ${pendingCheck.meal_id}: ${text}. Requesting clarification.`);
+    console.log(`[POST_MEAL_CHECK] Unclear response for meal ${pendingCheck.mealRef.tab}:${pendingCheck.mealRef.rowId}: ${text}. Requesting clarification.`);
     await message.reply({
         content: `${EMOJI.thinking} Any symptoms to log?`,
         components: buttonsSeverity(false, true) // Pass true to include 'None' button

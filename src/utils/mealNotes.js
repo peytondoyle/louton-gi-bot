@@ -2,45 +2,69 @@ const { google } = require('googleapis');
 
 /**
  * Updates the Notes column of a specific meal row in Google Sheets.
- * The mealId is expected in the format "SheetName:RowIndex".
- * @param {string} mealId - The ID of the meal row (e.g., "Peyton:123").
- * @param {string} noteToAppend - The note to append (e.g., "after_effect=ok").
+ * The mealRef is an object containing { tab: string, rowId: number, timestampISO: string }.
+ * @param {object} googleSheets - The authenticated Google Sheets instance.
+ * @param {object} mealRef - The reference to the meal row.
+ * @param {string[]} tokens - An array of notes tokens to append.
+ * @returns {Promise<{ok: boolean, reason?: string, notes?: string}>} Result of the update operation.
  */
-async function updateMealNotes(mealId, noteToAppend, googleSheets) {
-    const [sheetName, rowIndexStr] = mealId.split(':');
-    const rowIndex = parseInt(rowIndexStr, 10);
-
-    if (!sheetName || isNaN(rowIndex) || rowIndex < 2) {
-        console.error(`[updateMealNotes] Invalid mealId format: ${mealId}`);
-        return;
+async function updateMealNotes(googleSheets, mealRef, tokens) {
+    if (!mealRef || (!mealRef.rowId && !mealRef.timestampISO) || !mealRef.tab) {
+        console.error(`[updateMealNotes] Invalid mealRef: ${JSON.stringify(mealRef)}`);
+        return { ok: false, reason: 'NO_MEAL_REF' };
     }
 
     try {
-        // Get the current Notes value
-        const range = `${sheetName}!K${rowIndex}`; // Assuming Notes is column K (11th column, A=1, B=2, ..., K=11)
-        const response = await googleSheets.sheets.spreadsheets.values.get({
-            spreadsheetId: process.env.GOOGLE_SHEETS_ID,
-            range,
-        });
+        const sheetName = mealRef.tab;
+        let rowIndex = mealRef.rowId;
+        let currentNotes = '';
 
-        let currentNotes = response.data.values && response.data.values[0] ? response.data.values[0][0] : '';
-        let newNotes;
-        if (currentNotes) {
-            newNotes = `${currentNotes}; ${noteToAppend}`;
+        if (!rowIndex) {
+            // If rowId is not present, attempt to find the row by timestamp
+            const allRows = await googleSheets.getRows({}, sheetName);
+            const targetRow = allRows.rows.find(row => row.Timestamp === mealRef.timestampISO);
+            if (targetRow && targetRow._rawData && targetRow._rawData.rowIndex) {
+                rowIndex = targetRow._rawData.rowIndex + 1; // +1 because sheet rows are 1-indexed
+                currentNotes = targetRow.Notes || '';
+            } else {
+                console.warn(`[updateMealNotes] Meal row not found by timestamp for ${mealRef.timestampISO} in ${sheetName}.`);
+                return { ok: false, reason: 'MEAL_NOT_FOUND' };
+            }
         } else {
-            newNotes = noteToAppend;
+            // Get the current Notes value using rowId
+            const range = `${sheetName}!K${rowIndex}`; // Assuming Notes is column K
+            const response = await googleSheets.sheets.spreadsheets.values.get({
+                spreadsheetId: process.env.GOOGLE_SHEETS_ID,
+                range,
+            });
+            currentNotes = response.data.values && response.data.values[0] ? response.data.values[0][0] : '';
         }
 
+        const parts = currentNotes
+            .split(';')
+            .map(s => s.trim())
+            .filter(Boolean);
+
+        for (const t of tokens) {
+            if (!parts.includes(t)) parts.push(t);
+        }
+
+        const nextNotes = parts.join('; ');
+
         // Update the Notes column
+        const rangeToUpdate = `${sheetName}!K${rowIndex}`;
         await googleSheets.sheets.spreadsheets.values.update({
             spreadsheetId: process.env.GOOGLE_SHEETS_ID,
-            range,
+            range: rangeToUpdate,
             valueInputOption: 'USER_ENTERED',
-            resource: { values: [[newNotes]] },
+            resource: { values: [[nextNotes]] },
         });
-        console.log(`[updateMealNotes] Successfully updated notes for meal ${mealId} with: ${noteToAppend}`);
+
+        console.log(`[updateMealNotes] Successfully updated notes for meal ${sheetName}:${rowIndex} with: ${nextNotes}`);
+        return { ok: true, notes: nextNotes };
     } catch (error) {
-        console.error(`[updateMealNotes] Failed to update notes for meal ${mealId}: ${error.message}`);
+        console.error(`[updateMealNotes] Failed to update notes for meal ${JSON.stringify(mealRef)}: ${error.message}`);
+        return { ok: false, reason: error.message };
     }
 }
 
