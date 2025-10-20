@@ -565,6 +565,8 @@ async function logFromNLU(message, parseResult) {
     const sheetName = googleSheets.getLogSheetNameForUser(userId);
 
     // Log to Sheets using new method
+    let saveSucceeded = false;
+
     const result = await googleSheets.appendRowToSheet(sheetName, rowObj);
 
     if (!result.success) {
@@ -572,6 +574,8 @@ async function logFromNLU(message, parseResult) {
         return false; // Save failed
     }
 
+    // Mark save as successful IMMEDIATELY
+    saveSucceeded = true;
     console.log(`[SAVE] ✅ Successfully appended to ${sheetName}`);
 
     // ========== BUILD UNDO REFERENCE (Safe, with fallbacks) ==========
@@ -624,10 +628,10 @@ async function logFromNLU(message, parseResult) {
         }
     }
 
-    // ========== POST-SUCCESS NON-FATAL OPERATIONS ==========
-    // Wrap each in its own try-catch - failures are warnings, not errors
+    // ========== POST-SUCCESS NON-FATAL OPERATIONS (Fire-and-forget) ==========
+    // All operations use .catch() - failures logged but don't affect user experience
 
-    // Add to context memory
+    // Context memory (synchronous, safe)
     try {
         contextMemory.push(userId, {
             type: intent,
@@ -636,60 +640,46 @@ async function logFromNLU(message, parseResult) {
             timestamp: Date.now()
         });
     } catch (e) {
-        console.warn('[POSTSAVE] Context memory failed:', e.message);
+        console.warn('[POSTSAVE][warn] context memory:', e.message);
     }
 
-    // Trigger warnings (food/drink only)
+    // Trigger warnings (food/drink only) - fire and forget
     if (intent === 'food' || intent === 'drink') {
+        checkTriggerWarning(message, userId, rowObj.Details)
+            .catch(e => console.warn('[POSTSAVE][warn] trigger warning:', e.message));
+    }
+
+    // Contextual follow-ups - fire and forget
+    (async () => {
         try {
-            await checkTriggerWarning(message, userId, rowObj.Details);
+            const userPrefs = await getUserPrefs(userId, googleSheets);
+            const tz = userPrefs.TZ || TIMEZONE;
+            await scheduleContextualFollowups({
+                googleSheets,
+                message,
+                parseResult: { intent, slots },
+                tz,
+                userId,
+                userPrefs
+            });
         } catch (e) {
-            console.warn('[POSTSAVE] Trigger warning failed:', e.message);
+            console.warn('[POSTSAVE][warn] followups:', e.message);
         }
-    }
+    })();
 
-    // Contextual follow-ups
-    try {
-        const userPrefs = await getUserPrefs(userId, googleSheets);
-        const tz = userPrefs.TZ || TIMEZONE;
-
-        await scheduleContextualFollowups({
-            googleSheets,
-            message,
-            parseResult: { intent, slots },
-            tz,
-            userId,
-            userPrefs
-        });
-    } catch (e) {
-        console.warn('[POSTSAVE] Contextual followups failed:', e.message);
-    }
-
-    // Trigger linking (symptom/reflux only)
+    // Trigger linking (symptom/reflux only) - fire and forget
     if (intent === 'symptom' || intent === 'reflux') {
-        try {
-            await offerTriggerLink(message, userId);
-        } catch (e) {
-            console.warn('[POSTSAVE] Trigger link failed:', e.message);
-        }
+        offerTriggerLink(message, userId)
+            .catch(e => console.warn('[POSTSAVE][warn] trigger link:', e.message));
 
-        try {
-            await checkRoughPatch(message, userId);
-        } catch (e) {
-            console.warn('[POSTSAVE] Rough patch check failed:', e.message);
-        }
+        checkRoughPatch(message, userId)
+            .catch(e => console.warn('[POSTSAVE][warn] rough patch:', e.message));
 
-        try {
-            await surfaceTrendChip(message, userTag, userId);
-        } catch (e) {
-            console.warn('[POSTSAVE] Trend chip failed:', e.message);
-        }
+        surfaceTrendChip(message, userTag, userId)
+            .catch(e => console.warn('[POSTSAVE][warn] trend chip:', e.message));
 
-        try {
-            await scheduleSymptomFollowup(userId);
-        } catch (e) {
-            console.warn('[POSTSAVE] Symptom followup failed:', e.message);
-        }
+        scheduleSymptomFollowup(userId)
+            .catch(e => console.warn('[POSTSAVE][warn] symptom followup:', e.message));
     }
 
     console.log('[SAVE] ✅ Post-save operations complete');
