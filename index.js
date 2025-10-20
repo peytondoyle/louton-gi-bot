@@ -1450,4 +1450,147 @@ async function handleGoal(message, args) {
         if (currentGoal) {
             return message.reply(`📊 Your current daily goal is **${currentGoal} kcal**.\n\nUse \`!goal <number>\` to change it.`);
         } else {
-            return message.reply(`📊 No daily goal set yet.\n\nUse \`!goal <number>\`
+            return message.reply(`📊 No daily goal set yet.\n\nUse \`!goal <number>\` to set one (e.g., \`!goal 2200\`).`);
+        }
+    }
+
+    // Parse the goal value
+    const val = parseInt(args.trim(), 10);
+
+    if (!Number.isFinite(val) || val < 1000 || val > 5000) {
+        return message.reply('Please provide a daily kcal goal between 1000 and 5000.');
+    }
+
+    // Set the goal
+    userGoals.set(userId, val);
+
+    return message.reply(`✅ Set your daily goal to **${val} kcal**.`);
+}
+
+// Handle reminders command - configure proactive reminders
+async function handleReminders(message, args) {
+    const userId = message.author.id;
+
+    if (!args || args.trim() === '') {
+        return message.reply(
+            '🔔 **Reminder Settings**\n\n' +
+            '**Usage:**\n' +
+            '• `!reminders on` - Enable reminders\n' +
+            '• `!reminders off` - Disable reminders\n' +
+            '• `!reminders time 08:00` - Set morning check-in\n' +
+            '• `!reminders evening 20:30` - Set evening recap\n' +
+            '• `!reminders inactivity 14:00` - Set inactivity nudge\n\n' +
+            '_Blank time to disable: `!reminders evening`_'
+        );
+    }
+
+    const [sub, val] = args.trim().split(/\s+/);
+
+    // Handle on/off
+    if (sub === 'on' || sub === 'off') {
+        await setUserPrefs(userId, { DM: sub }, googleSheets);
+        await updateUserSchedule(client, googleSheets, userId, {
+            getLogSheetNameForUser: googleSheets.getLogSheetNameForUser.bind(googleSheets),
+            getTodayEntries: googleSheets.getTodayEntries.bind(googleSheets),
+            setUserPrefs: (id, partial) => setUserPrefs(id, partial, googleSheets)
+        });
+        return message.reply(`🔔 Reminders ${sub === 'on' ? '**enabled**' : '**disabled**'}.`);
+    }
+
+    // Handle time settings
+    const keyMap = {
+        time: 'MorningHHMM',
+        morning: 'MorningHHMM',
+        evening: 'EveningHHMM',
+        inactivity: 'InactivityHHMM'
+    };
+
+    const key = keyMap[sub];
+    if (key) {
+        const timeValue = (val || '').trim();
+
+        // Validate time format if provided
+        if (timeValue && !/^\d{1,2}:\d{2}$/.test(timeValue)) {
+            return message.reply('⚠️ Invalid time format. Use HH:MM (e.g., `08:00` or `20:30`)');
+        }
+
+        await setUserPrefs(userId, { [key]: timeValue }, googleSheets);
+        await updateUserSchedule(client, googleSheets, userId, {
+            getLogSheetNameForUser: googleSheets.getLogSheetNameForUser.bind(googleSheets),
+            getTodayEntries: googleSheets.getTodayEntries.bind(googleSheets),
+            setUserPrefs: (id, partial) => setUserPrefs(id, partial, googleSheets)
+        });
+
+        const labelMap = {
+            time: '⏰ Morning check-in',
+            morning: '⏰ Morning check-in',
+            evening: '🌙 Evening recap',
+            inactivity: '📭 Inactivity nudge'
+        };
+
+        const label = labelMap[sub];
+        return message.reply(`${label} ${timeValue ? `set to **${timeValue}**` : '**disabled**'}.`);
+    }
+
+    return message.reply('⚠️ Unknown subcommand. Use `!reminders` for help.');
+}
+
+// Handle DND, Timezone, Snooze commands (Phase 4)
+async function handleDND(message, args) {
+    await dndCommands.handleDND(message, args, { getUserPrefs, setUserPrefs, googleSheets });
+}
+
+async function handleTimezone(message, args) {
+    await dndCommands.handleTimezone(message, args, { getUserPrefs, setUserPrefs, googleSheets });
+}
+
+async function handleSnooze(message, args) {
+    await dndCommands.handleSnooze(message, args, { getUserPrefs, setUserPrefs, googleSheets });
+}
+
+function setupReminders() {
+    const morningTime = process.env.MORNING_REMINDER_TIME || '09:00';
+    const eveningTime = process.env.EVENING_REMINDER_TIME || '20:00';
+
+    // Morning reminder
+    const [morningHour, morningMinute] = morningTime.split(':');
+    cron.schedule(`${morningMinute} ${morningHour} * * *`, async () => {
+        const channel = client.channels.cache.get(CHANNEL_ID);
+        if (channel) {
+            await channel.send('☀️ Good morning! Don\'t forget to log your breakfast and any morning symptoms. Use `!help` if you need command reminders!');
+        }
+    });
+
+    // Evening reminder
+    const [eveningHour, eveningMinute] = eveningTime.split(':');
+    cron.schedule(`${eveningMinute} ${eveningHour} * * *`, async () => {
+        const channel = client.channels.cache.get(CHANNEL_ID);
+        if (channel) {
+            await channel.send('🌙 Evening check-in! Remember to log your dinner and any symptoms from today. Use `!today` to see your daily summary!');
+        }
+    });
+
+    console.log(`✅ Reminders scheduled for ${morningTime} and ${eveningTime}`);
+}
+
+// Error handling
+process.on('unhandledRejection', error => {
+    console.error('Unhandled promise rejection:', error);
+});
+
+// Login to Discord
+console.log('🔑 Attempting to login to Discord...');
+console.log(`   Token length: ${DISCORD_TOKEN ? DISCORD_TOKEN.length : 'undefined'} characters`);
+console.log(`   Token starts with: ${DISCORD_TOKEN ? DISCORD_TOKEN.substring(0, 20) + '...' : 'undefined'}`);
+
+client.login(DISCORD_TOKEN)
+    .then(() => {
+        console.log('🔐 Successfully authenticated with Discord');
+    })
+    .catch(error => {
+        console.error('❌ Failed to login to Discord:', error);
+        console.log('Please check your DISCORD_TOKEN in the .env file');
+        process.exit(1);
+    });
+
+module.exports = { handleNaturalLanguage };
