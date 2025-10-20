@@ -580,7 +580,7 @@ async function logFromNLU(message, parseResult) {
     const userId = message.author.id;
     const userTag = message.author.tag;
     const isPeyton = (userId === PEYTON_ID);
-    const sheetName = googleSheets.getLogSheetNameForUser(userId);
+    const sheetName = getSheetName(userId, userTag);
 
     // ========== BUILD APPEND PAYLOAD ==========
     const { buildNotesFromParse } = require('./src/utils/notesBuild');
