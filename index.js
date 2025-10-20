@@ -995,6 +995,19 @@ client.on('messageCreate', async (message) => {
             return; // Silently ignore messages from other channels
         }
 
+        // --- IDEMPOTENCY CHECK ---
+        // If we've seen this message ID recently, ignore it to prevent duplicate processing
+        if (recentMessageIds.has(message.id)) {
+            console.log(`[IDEMPOTENCY] Ignoring duplicate message ID: ${message.id}`);
+            return;
+        }
+        recentMessageIds.add(message.id);
+        // Clean up old message IDs after a safe interval (e.g., 1 minute) to prevent memory leaks
+        setTimeout(() => {
+            recentMessageIds.delete(message.id);
+        }, 60 * 1000);
+
+
         // All non-bot messages are now routed through the NLU handler.
         // The NLU handler will decide if it's a log, question, or utility command.
         try {
