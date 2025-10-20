@@ -1,15 +1,14 @@
-const { Client, GatewayIntentBits, EmbedBuilder, Partials, ActionRowBuilder, ButtonBuilder, ButtonStyle } = require('discord.js');
-const cron = require('node-cron');
+const { Client, GatewayIntentBits, Partials } = require('discord.js');
 const time = require('../utils/time');
-const analyzer = require('../utils/analyzer');
-const NLPHandler = require('../utils/nlpHandler');
-const PatternAnalyzer = require('../utils/patternAnalyzer');
-const ClarificationHandler = require('../utils/clarificationHandler');
+// const analyzer = require('../utils/analyzer'); // Removed
+// const NLPHandler = require('../utils/nlpHandler'); // Removed
+// const PatternAnalyzer = require('../utils/patternAnalyzer'); // Removed
+// const ClarificationHandler = require('../utils/clarificationHandler'); // Removed
 
 // NLU System imports - V2 UPGRADE
 const { understand, formatParseResult } = require('../nlu/understand-v2');
 const { extractMetadata } = require('../nlu/rules');
-const { getWindowStartTime } = require('../nlu/ontology');
+// const { getWindowStartTime } = require('../nlu/ontology'); // Removed
 const { record: recordNLUMetrics } = require('../nlu/metrics-v2');
 const { postprocess } = require('../nlu/postprocess');
 
@@ -34,7 +33,7 @@ const dndCommands = require('../commands/dnd');
 const { markInteracted, isUnderWatch } = require('../reminders/responseWatcher');
 const { ensureReply } = require('../utils/ensureReply');
 const { buildNotesFromParse } = require('../utils/notesBuild');
-const contextMemory = require('../utils/contextMemory');
+// const contextMemory = require('../utils/contextMemory'); // Removed
 const { scheduleSymptomFollowup } = require('../scheduler/reminders');
 const { findSymptomNear } = require('../sheets/findSymptomNear'); // New import
 
@@ -383,12 +382,12 @@ async function postLogActions(message, parseResult, undoId, caloriesVal, rowObj,
 
     setImmediate(() => {
         try {
-            contextMemory.push(userId, {
-                type: intent,
-                details: slots.item || slots.symptom_type || intent,
-                severity: slots.severity ? mapSeverityToLabel(slots.severity) : '',
-                timestamp: Date.now()
-            });
+            // contextMemory.push(userId, { // DEPRECATED
+            //     type: intent,
+            //     details: slots.item || slots.symptom_type || intent,
+            //     severity: slots.severity ? mapSeverityToLabel(slots.severity) : '',
+            //     timestamp: Date.now()
+            // });
             if (intent === 'symptom' || intent === 'reflux') {
                 deps.scheduleSymptomFollowup(userId).catch(e => console.warn('[POSTSAVE][warn] followup:', e.message));
             }
