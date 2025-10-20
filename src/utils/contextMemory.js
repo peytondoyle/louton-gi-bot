@@ -26,7 +26,7 @@ function getContext(userId) {
             entries: [],
             warnings: new Map(), // trigger -> timestamp of last warning
             lexicon: new Map(), // phrase -> { intent, slots, learnedAt }
-            pendingContext: null, // For conversational follow-ups
+            // pendingContext: null, // For conversational follow-ups (migrated to services/pending.js)
             lastCleanup: Date.now()
         });
     }
@@ -79,35 +79,35 @@ function push(userId, entry) {
  * @param {Object} data - Any data to associate with the context.
  * @param {number} ttl - Time-to-live in seconds.
  */
-function setPendingContext(userId, type, data, ttl = 300) { // 5 minute default TTL
-    const context = getContext(userId);
-    context.pendingContext = {
-        type,
-        data,
-        expiresAt: Date.now() + (ttl * 1000)
-    };
-}
+// function setPendingContext(userId, type, data, ttl = 300) { // 5 minute default TTL
+//     const context = getContext(userId);
+//     context.pendingContext = {
+//         type,
+//         data,
+//         expiresAt: Date.now() + (ttl * 1000)
+//     };
+// }
 
 /**
  * Retrieves and consumes a pending context if it exists and is not expired.
  * @param {string} userId - Discord user ID
  * @returns {Object|null} The pending context object, or null if none.
  */
-function getPendingContext(userId) {
-    const context = getContext(userId);
-    if (!context.pendingContext) {
-        return null;
-    }
+// function getPendingContext(userId) {
+//     const context = getContext(userId);
+//     if (!context.pendingContext) {
+//         return null;
+//     }
 
-    if (Date.now() > context.pendingContext.expiresAt) {
-        context.pendingContext = null; // Expired
-        return null;
-    }
+//     if (Date.now() > context.pendingContext.expiresAt) {
+//         context.pendingContext = null; // Expired
+//         return null;
+//     }
 
-    const pending = context.pendingContext;
-    context.pendingContext = null; // Consume on read
-    return pending;
-}
+//     const pending = context.pendingContext;
+//     context.pendingContext = null; // Consume on read
+//     return pending;
+// }
 
 
 /**
@@ -463,7 +463,7 @@ module.exports = {
     lookupPhrase,
     isWarningMuted,
     setWarningMute,
-    setPendingContext,
-    getPendingContext,
+    // setPendingContext, // Removed as per edit hint
+    // getPendingContext, // Removed as per edit hint
     resolveReference  // V2: Reference resolution
 };

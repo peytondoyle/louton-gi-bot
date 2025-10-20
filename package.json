@@ -6,9 +6,11 @@
     "scripts": {
         "start": "node index.js",
         "dev": "nodemon index.js",
-        "test:nlu": "node tests/nlu.test.js",
-        "test:calories": "node tests/calorie.test.js",
-        "test:upgrades": "node tests/calorie-upgrades.test.js"
+        "test:nlu": "NODE_OPTIONS=--experimental-vm-modules jest tests/nlu.test.js",
+        "test:calorie": "NODE_OPTIONS=--experimental-vm-modules jest tests/calorie.test.js",
+        "test:upgrades": "NODE_OPTIONS=--experimental-vm-modules jest tests/calorie-upgrades.test.js",
+        "lint": "eslint . --ext .js",
+        "lint:fix": "eslint . --ext .js --fix"
     },
   "keywords": [
     "louton",
@@ -38,6 +40,9 @@
     "openai": "^6.5.0"
   },
   "devDependencies": {
+    "eslint": "^9.0.0",
+    "eslint-plugin-unused-imports": "^4.0.0",
+    "eslint-plugin-import": "^2.29.0",
     "nodemon": "^3.1.0"
   }
 }

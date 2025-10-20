@@ -8,9 +8,9 @@ const { parsePortion } = require('../nutrition/portionParser');
 const { findBrandInfo } = require('../nutrition/brandLexicon');
 const { estimateCaloriesForItemAndSides } = require('../nutrition/estimateCalories');
 
-// Pending interaction tracking (in-memory with TTL)
-const pendingInteractions = new Map();
-const PENDING_TTL_MS = 120000; // 2 minutes
+// Import new pending context service
+const pending = require('../../services/pending');
+const TTL_SECONDS = 120; // 2 minutes, matching old PENDING_TTL_MS
 
 /**
  * Main router for ux:* button interactions
@@ -146,11 +146,7 @@ async function handleAddPortion(interaction, deps) {
     const rowIndex = parseInt(parts[3], 10);
 
     // Store pending state
-    setPendingInteraction(userId, 'portion', {
-        sheetName,
-        rowIndex,
-        expiresAt: Date.now() + PENDING_TTL_MS
-    });
+    await pending.set(pending.keyFrom(interaction), { type: 'portion', data: { sheetName, rowIndex } }, TTL_SECONDS);
 
     await interaction.reply({
         content: '📏 Select a portion size:',
@@ -167,16 +163,16 @@ async function handlePortionSelection(interaction, deps) {
     const userId = interaction.user.id;
     const customId = interaction.customId;
 
-    const pending = getPendingInteraction(userId, 'portion');
-    if (!pending) {
+    const pendingState = await pending.get(pending.keyFrom(interaction));
+    if (!pendingState || pendingState.type !== 'portion' || !pendingState.data) {
         await interaction.reply({
-            content: '❌ Session expired. Please log again.',
+            content: '❌ Session expired or invalid. Please log again.',
             ephemeral: true
         });
         return;
     }
 
-    const { sheetName, rowIndex } = pending;
+    const { sheetName, rowIndex } = pendingState.data;
 
     // Handle custom portion
     if (customId === 'ux:portion:custom') {
@@ -205,7 +201,7 @@ async function handlePortionSelection(interaction, deps) {
     }
 
     await applyPortionUpdate(interaction, deps, sheetName, rowIndex, portionText);
-    clearPendingInteraction(userId, 'portion');
+    await pending.clear(pending.keyFrom(interaction));
 }
 
 /**
@@ -285,11 +281,7 @@ async function handleAddBrand(interaction, deps) {
     const rowIndex = parseInt(parts[3], 10);
 
     // Store pending state
-    setPendingInteraction(userId, 'brand', {
-        sheetName,
-        rowIndex,
-        expiresAt: Date.now() + PENDING_TTL_MS
-    });
+    await pending.set(pending.keyFrom(interaction), { type: 'brand', data: { sheetName, rowIndex } }, TTL_SECONDS);
 
     // Try to detect category from row details
     const category = 'generic'; // TODO: could detect from row Details
@@ -309,16 +301,16 @@ async function handleBrandSelection(interaction, deps) {
     const userId = interaction.user.id;
     const customId = interaction.customId;
 
-    const pending = getPendingInteraction(userId, 'brand');
-    if (!pending) {
+    const pendingState = await pending.get(pending.keyFrom(interaction));
+    if (!pendingState || pendingState.type !== 'brand' || !pendingState.data) {
         await interaction.reply({
-            content: '❌ Session expired. Please log again.',
+            content: '❌ Session expired or invalid. Please log again.',
             ephemeral: true
         });
         return;
     }
 
-    const { sheetName, rowIndex } = pending;
+    const { sheetName, rowIndex } = pendingState.data;
 
     // Handle custom brand
     if (customId === 'ux:brand:custom') {
@@ -349,7 +341,7 @@ async function handleBrandSelection(interaction, deps) {
     }
 
     await applyBrandUpdate(interaction, deps, sheetName, rowIndex, brand.value);
-    clearPendingInteraction(userId, 'brand');
+    await pending.clear(pending.keyFrom(interaction));
 }
 
 /**
@@ -430,11 +422,7 @@ async function handleAddPhoto(interaction, deps) {
     const rowIndex = parseInt(parts[3], 10);
 
     // Store pending state
-    setPendingInteraction(userId, 'photo', {
-        sheetName,
-        rowIndex,
-        expiresAt: Date.now() + PENDING_TTL_MS
-    });
+    await pending.set(pending.keyFrom(interaction), { type: 'photo', data: { sheetName, rowIndex } }, TTL_SECONDS);
 
     await interaction.reply({
         content: '📸 Send a message with one or more photos in the next 2 minutes.',
@@ -451,10 +439,10 @@ async function handlePhotoMessage(message, deps) {
     const { googleSheets } = deps;
     const userId = message.author.id;
 
-    const pending = getPendingInteraction(userId, 'photo');
-    if (!pending) return false;
+    const pendingState = await pending.get(pending.keyFrom(message));
+    if (!pendingState || pendingState.type !== 'photo' || !pendingState.data) return false;
 
-    const { sheetName, rowIndex } = pending;
+    const { sheetName, rowIndex } = pendingState.data;
 
     if (message.attachments.size === 0) {
         return false; // Not a photo message
@@ -478,7 +466,7 @@ async function handlePhotoMessage(message, deps) {
         const result = await googleSheets.getRows({}, sheetName);
         if (!result.success || !result.rows[rowIndex - 2]) {
             await message.reply('❌ Entry not found.');
-            clearPendingInteraction(userId, 'photo');
+            await pending.clear(pending.keyFrom(message));
             return true;
         }
 
@@ -497,12 +485,12 @@ async function handlePhotoMessage(message, deps) {
         await message.reply(`✅ Added ${photos.length} photo(s) to your entry!`);
 
         console.log(`[PHOTO] Added ${photos.length} photos to row ${rowIndex}`);
-        clearPendingInteraction(userId, 'photo');
+        await pending.clear(pending.keyFrom(message));
         return true;
     } catch (error) {
         console.error('[PHOTO] Error handling photo:', error);
         await message.reply('❌ Failed to add photos.');
-        clearPendingInteraction(userId, 'photo');
+        await pending.clear(pending.keyFrom(message));
         return true;
     }
 }
@@ -515,73 +503,41 @@ async function handleCustomInput(message, deps) {
     const text = message.content.trim();
 
     // Check for pending portion
-    const portionPending = getPendingInteraction(userId, 'portion');
-    if (portionPending) {
-        const { sheetName, rowIndex } = portionPending;
+    const portionPendingState = await pending.get(pending.keyFrom(message));
+    if (portionPendingState && portionPendingState.type === 'portion' && portionPendingState.data) {
+        const { sheetName, rowIndex } = portionPendingState.data;
         await applyPortionUpdate({ reply: (opts) => message.reply(opts) }, deps, sheetName, rowIndex, text);
-        clearPendingInteraction(userId, 'portion');
+        await pending.clear(pending.keyFrom(message));
         return true;
     }
 
     // Check for pending brand
-    const brandPending = getPendingInteraction(userId, 'brand');
-    if (brandPending) {
-        const { sheetName, rowIndex } = brandPending;
+    const brandPendingState = await pending.get(pending.keyFrom(message));
+    if (brandPendingState && brandPendingState.type === 'brand' && brandPendingState.data) {
+        const { sheetName, rowIndex } = brandPendingState.data;
         await applyBrandUpdate({ reply: (opts) => message.reply(opts) }, deps, sheetName, rowIndex, text);
-        clearPendingInteraction(userId, 'brand');
+        await pending.clear(pending.keyFrom(message));
         return true;
     }
 
     return false;
 }
 
-// Pending interaction helpers
-function setPendingInteraction(userId, type, data) {
-    const key = `${userId}:${type}`;
-    pendingInteractions.set(key, data);
-    console.log(`[UX] Set pending ${type} for user ${userId}`);
-}
-
-function getPendingInteraction(userId, type) {
-    const key = `${userId}:${type}`;
-    const pending = pendingInteractions.get(key);
-
-    if (!pending) return null;
-
-    // Check TTL
-    if (Date.now() > pending.expiresAt) {
-        pendingInteractions.delete(key);
-        console.log(`[UX] Expired pending ${type} for user ${userId}`);
-        return null;
-    }
-
-    return pending;
-}
-
-function clearPendingInteraction(userId, type) {
-    const key = `${userId}:${type}`;
-    pendingInteractions.delete(key);
-    console.log(`[UX] Cleared pending ${type} for user ${userId}`);
-}
-
-// Cleanup expired pending interactions every minute
-setInterval(() => {
-    const now = Date.now();
-    let cleaned = 0;
-    for (const [key, data] of pendingInteractions.entries()) {
-        if (now > data.expiresAt) {
-            pendingInteractions.delete(key);
-            cleaned++;
-        }
-    }
-    if (cleaned > 0) {
-        console.log(`[UX] Cleaned up ${cleaned} expired pending interactions`);
-    }
-}, 60000);
-
 module.exports = {
     handleUxButton,
     handlePhotoMessage,
-    handleCustomInput,
-    getPendingInteraction
+    handleCustomInput
 };
+
+Object.defineProperty(module.exports, 'pendingClarifications', {
+  get() {
+    throw new Error(
+      'DEPRECATED: pendingClarifications was removed. Use services/pending.js'
+    );
+  },
+  set() {
+    throw new Error('Cannot set deprecated export pendingClarifications');
+},
+  configurable: false,
+  enumerable: false,
+});

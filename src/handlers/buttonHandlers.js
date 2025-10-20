@@ -2,29 +2,30 @@
 // Processes all button clicks from clarifications, check-ins, and actions
 
 const { handleNaturalLanguage } = require('../../index');
-const { EMOJI, BUTTON_IDS } = require('../constants/ux');
+const { EMOJI, BUTTON_IDS, PHRASES, getRandomPhrase } = require('../constants/ux');
 const { successEmbed, errorEmbed, buttonsSeverity, buttonsMealTime, buttonsBristol, buttonsSymptomType } = require('../ui/components');
-const contextMemory = require('../utils/contextMemory');
 const { EmbedBuilder } = require('discord.js');
-const db = require('../../services/sqliteBridge');
+const pending = require('../../services/pending'); // New pending context service
+const { TTL_SECONDS } = require('../../services/pending'); // Use TTL from pending service
+const contextMemory = require('../utils/contextMemory');
 
-// Helper to generate a consistent DB key
-const getKey = (userId) => `clarification:${userId}`;
+// Helper to generate a consistent DB key - REMOVED, not used with new pending service
+// const getKey = (userId) => `clarification:${userId}`;
 
-// This module no longer holds state. 
+// This module no longer holds state.
 // `pendingClarifications` is now an interface to the database.
-const pendingClarifications = {
-    set: (userId, data) => {
-        // Clarifications should be short-lived, e.g., 5 minutes
-        db.set(getKey(userId), data, 300);
-    },
-    get: (userId) => {
-        return db.get(getKey(userId));
-    },
-    delete: (userId) => {
-        db.del(getKey(userId));
-    }
-};
+// const pendingClarifications = {
+//     set: (userId, data) => {
+//         // Clarifications should be short-lived, e.g., 5 minutes
+//         db.set(getKey(userId), data, 300);
+//     },
+//     get: (userId) => {
+//         return db.get(getKey(userId));
+//     },
+//     delete: (userId) => {
+//         db.del(getKey(userId));
+//     }
+// };
 
 /**
  * Main handler for all button interactions.
@@ -37,39 +38,39 @@ async function handleButtonInteraction(interaction) {
     const userId = user.id;
 
     // Retrieve the pending clarification from the database
-    const pending = pendingClarifications.get(userId);
+    const pendingClarification = await pending.get(pending.keyFrom(interaction));
     
     try {
         const [namespace, value] = customId.split(':');
 
         switch (namespace) {
             case 'severity':
-                if (pending && pending.type === 'nlu_clarification') {
-                    pending.parseResult.slots.severity = parseInt(value, 10);
-                    await handleNLUClarification(interaction, pending);
+                if (pendingClarification && pendingClarification.type === 'nlu_clarification') {
+                    pendingClarification.parseResult.slots.severity = parseInt(value, 10);
+                    await handleNLUClarification(interaction, pendingClarification);
                 }
                 break;
             case 'meal':
-                if (pending && pending.type === 'nlu_clarification') {
-                    pending.parseResult.slots.meal_time = value;
-                    await handleNLUClarification(interaction, pending);
+                if (pendingClarification && pendingClarification.type === 'nlu_clarification') {
+                    pendingClarification.parseResult.slots.meal_time = value;
+                    await handleNLUClarification(interaction, pendingClarification);
                 }
                 break;
             case 'symptom':
-                 if (pending && pending.type === 'nlu_clarification') {
-                    pending.parseResult.slots.symptom_type = value;
-                    await handleNLUClarification(interaction, pending);
+                 if (pendingClarification && pendingClarification.type === 'nlu_clarification') {
+                    pendingClarification.parseResult.slots.symptom_type = value;
+                    await handleNLUClarification(interaction, pendingClarification);
                 }
                 break;
             case 'bristol':
-                if (pending && pending.type === 'nlu_clarification') {
-                    pending.parseResult.slots.bristol = parseInt(value, 10);
-                    await handleNLUClarification(interaction, pending);
+                if (pendingClarification && pendingClarification.type === 'nlu_clarification') {
+                    pendingClarification.parseResult.slots.bristol = parseInt(value, 10);
+                    await handleNLUClarification(interaction, pendingClarification);
                 }
                 break;
             case 'intent':
-                if (pending && pending.type === 'intent_clarification') {
-                    await handleIntentClarification(interaction, pending);
+                if (pendingClarification && pendingClarification.type === 'intent_clarification') {
+                    await handleIntentClarification(interaction, pendingClarification);
                 }
                 break;
             case 'help':
@@ -102,8 +103,8 @@ async function handleIntentClarification(interaction) {
     const userId = interaction.user.id;
     const customId = interaction.customId;
 
-    const pending = pendingClarifications.get(userId);
-    if (!pending || pending.type !== 'intent_clarification') {
+    const pendingClarification = await pending.get(pending.keyFrom(interaction));
+    if (!pendingClarification || pendingClarification.type !== 'intent_clarification') {
         await interaction.update({
             content: 'This action has expired. Please send your message again.',
             components: []
@@ -112,7 +113,7 @@ async function handleIntentClarification(interaction) {
     }
 
     // Clear the pending clarification
-    pendingClarifications.delete(userId);
+    await pending.clear(pending.keyFrom(interaction));
 
     if (customId === BUTTON_IDS.intent.cancel) {
         await interaction.update({
@@ -139,7 +140,7 @@ async function handleIntentClarification(interaction) {
         const fakeMessage = {
             ...interaction.message,
             author: interaction.user,
-            content: pending.originalMessage,
+            content: pendingClarification.originalMessage,
             // Re-parsing, so we need a reply method.
             // Let's edit the interaction reply.
             reply: (options) => {
@@ -179,11 +180,7 @@ async function handleSymptomType(interaction, googleSheets) {
     if (!symptom) return;
 
     // Store pending clarification
-    pendingClarifications.set(userId, {
-        type: 'severity',
-        symptomData: symptom,
-        timestamp: Date.now()
-    });
+    await pending.set(pending.keyFrom(interaction), { type: 'severity', symptomData: symptom }, TTL_SECONDS);
 
     // Ask for severity
     await interaction.update({
@@ -201,8 +198,8 @@ async function handleSeverity(interaction, googleSheets) {
     const userId = interaction.user.id;
     const user = interaction.user;
 
-    const pending = pendingClarifications.get(userId);
-    if (!pending) {
+    const pendingClarification = await pending.get(pending.keyFrom(interaction));
+    if (!pendingClarification) {
         await interaction.reply({
             content: `${EMOJI.error} Session expired. Please start over.`,
             ephemeral: true
@@ -215,31 +212,31 @@ async function handleSeverity(interaction, googleSheets) {
     const severityLabel = severityNum <= 3 ? 'mild' : (severityNum <= 6 ? 'moderate' : 'severe');
 
     // Check if this is an NLU clarification
-    if (pending.type === 'nlu_clarification') {
+    if (pendingClarification.type === 'nlu_clarification') {
         // Import NLU handler functions
         const indexModule = require('../../index');
 
         // Fill in the missing slot
-        pending.parseResult.slots.severity = severityNum;
-        pending.parseResult.missing = pending.parseResult.missing.filter(m => m !== 'severity');
+        pendingClarification.parseResult.slots.severity = severityNum;
+        pendingClarification.parseResult.missing = pendingClarification.parseResult.missing.filter(m => m !== 'severity');
 
         // Clear pending
-        pendingClarifications.delete(userId);
+        await pending.clear(pending.keyFrom(interaction));
 
         // If all slots filled, log via NLU system
-        if (pending.parseResult.missing.length === 0) {
+        if (pendingClarification.parseResult.missing.length === 0) {
             // We need to call logFromNLU from index.js - for now, manually log
             const { extractMetadata } = require('../nlu/rules');
-            const metadata = extractMetadata(pending.originalMessage);
+            const metadata = extractMetadata(pendingClarification.originalMessage);
 
             const notes = [];
-            if (pending.parseResult.slots.severity_note) notes.push(pending.parseResult.slots.severity_note);
+            if (pendingClarification.parseResult.slots.severity_note) notes.push(pendingClarification.parseResult.slots.severity_note);
             notes.push(`adjSeverity=${severityNum}`);
 
             const result = await googleSheets.appendRow({
                 user: user.tag,
-                type: pending.parseResult.intent,
-                value: pending.parseResult.intent === 'reflux' ? 'reflux' : (pending.parseResult.slots.symptom_type || 'symptom'),
+                type: pendingClarification.parseResult.intent,
+                value: pendingClarification.parseResult.intent === 'reflux' ? 'reflux' : (pendingClarification.parseResult.slots.symptom_type || 'symptom'),
                 severity: severityLabel,
                 notes: googleSheets.appendNotes ? googleSheets.appendNotes(notes) : notes.join('; '),
                 source: 'discord-dm-nlu'
@@ -256,8 +253,8 @@ async function handleSeverity(interaction, googleSheets) {
 
             // Add to context memory
             contextMemory.push(userId, {
-                type: pending.parseResult.intent,
-                details: pending.parseResult.intent === 'reflux' ? 'reflux' : (pending.parseResult.slots.symptom_type || 'symptom'),
+                type: pendingClarification.parseResult.intent,
+                details: pendingClarification.parseResult.intent === 'reflux' ? 'reflux' : (pendingClarification.parseResult.slots.symptom_type || 'symptom'),
                 severity: severityLabel,
                 timestamp: Date.now()
             });
@@ -265,7 +262,7 @@ async function handleSeverity(interaction, googleSheets) {
             // Success response
             const successMsg = getRandomPhrase(PHRASES.success);
             await interaction.update({
-                content: `${EMOJI.success} Logged **${pending.parseResult.intent}** (${severityLabel}).\n\n${successMsg}`,
+                content: `${EMOJI.success} Logged **${pendingClarification.parseResult.intent}** (${severityLabel}).\n\n${successMsg}`,
                 components: [],
                 embeds: []
             });
@@ -281,7 +278,7 @@ async function handleSeverity(interaction, googleSheets) {
     }
 
     // Original severity handler for non-NLU flows
-    if (pending.type !== 'severity') {
+    if (pendingClarification.type !== 'severity') {
         await interaction.reply({
             content: `${EMOJI.error} Session expired. Please start over.`,
             ephemeral: true
@@ -290,13 +287,13 @@ async function handleSeverity(interaction, googleSheets) {
     }
 
     // Clear pending
-    pendingClarifications.delete(userId);
+    await pending.clear(pending.keyFrom(interaction));
 
     // Log to sheets
     const result = await googleSheets.appendRow({
         user: user.tag,
-        type: pending.symptomData.type,
-        value: pending.symptomData.value,
+        type: pendingClarification.symptomData.type,
+        value: pendingClarification.symptomData.value,
         severity: severityLabel,
         notes: `Severity: ${severityNum}/10`,
         source: 'DM'
@@ -313,8 +310,8 @@ async function handleSeverity(interaction, googleSheets) {
 
     // Add to context memory
     contextMemory.push(userId, {
-        type: pending.symptomData.type,
-        details: pending.symptomData.value,
+        type: pendingClarification.symptomData.type,
+        details: pendingClarification.symptomData.value,
         severity: severityLabel,
         timestamp: Date.now()
     });
@@ -322,7 +319,7 @@ async function handleSeverity(interaction, googleSheets) {
     // Success response
     const successMsg = getRandomPhrase(PHRASES.success);
     await interaction.update({
-        content: `${EMOJI.success} Logged **${pending.symptomData.label}** (${severityLabel}).\n\n${successMsg}`,
+        content: `${EMOJI.success} Logged **${pendingClarification.symptomData.label}** (${severityLabel}).\n\n${successMsg}`,
         components: [],
         embeds: []
     });
@@ -350,8 +347,8 @@ async function handleMealTime(interaction, googleSheets) {
     const userId = interaction.user.id;
     const user = interaction.user;
 
-    const pending = pendingClarifications.get(userId);
-    if (!pending || pending.type !== 'mealTime') {
+    const pendingClarification = await pending.get(pending.keyFrom(interaction));
+    if (!pendingClarification || pendingClarification.type !== 'mealTime') {
         await interaction.reply({
             content: `${EMOJI.error} Session expired. Please start over.`,
             ephemeral: true
@@ -371,14 +368,14 @@ async function handleMealTime(interaction, googleSheets) {
     if (!mealTime) return;
 
     // Clear pending
-    pendingClarifications.delete(userId);
+    await pending.clear(pending.keyFrom(interaction));
 
     // Log to sheets with meal time in notes
     const result = await googleSheets.appendRow({
         user: user.tag,
-        type: pending.entryData.type,
-        value: pending.entryData.value,
-        notes: pending.entryData.notes || '',
+        type: pendingClarification.entryData.type,
+        value: pendingClarification.entryData.value,
+        notes: pendingClarification.entryData.notes || '',
         notesAppend: mealTime,
         mealType: mealTime,
         source: 'DM'
@@ -395,16 +392,16 @@ async function handleMealTime(interaction, googleSheets) {
 
     // Add to context memory
     contextMemory.push(userId, {
-        type: pending.entryData.type,
-        details: pending.entryData.value,
+        type: pendingClarification.entryData.type,
+        details: pendingClarification.entryData.value,
         timestamp: Date.now()
     });
 
     // Success response
-    const emoji = pending.entryData.type === 'food' ? EMOJI.food : EMOJI.drink;
+    const emoji = pendingClarification.entryData.type === 'food' ? EMOJI.food : EMOJI.drink;
     const successMsg = getRandomPhrase(PHRASES.success);
     await interaction.update({
-        content: `${emoji} Logged **${pending.entryData.value}** (${mealTime}).\n\n${successMsg}`,
+        content: `${emoji} Logged **${pendingClarification.entryData.value}** (${mealTime}).\n\n${successMsg}`,
         components: [],
         embeds: []
     });
@@ -417,8 +414,8 @@ async function handleBristol(interaction, googleSheets) {
     const userId = interaction.user.id;
     const user = interaction.user;
 
-    const pending = pendingClarifications.get(userId);
-    if (!pending || pending.type !== 'bristol') {
+    const pendingClarification = await pending.get(pending.keyFrom(interaction));
+    if (!pendingClarification || pendingClarification.type !== 'bristol') {
         await interaction.reply({
             content: `${EMOJI.error} Session expired. Please start over.`,
             ephemeral: true
@@ -430,7 +427,7 @@ async function handleBristol(interaction, googleSheets) {
     const bristolNum = interaction.customId.split('_')[1];
 
     // Clear pending
-    pendingClarifications.delete(userId);
+    await pending.clear(pending.keyFrom(interaction));
 
     // Log to sheets
     const result = await googleSheets.appendRow({
@@ -438,7 +435,7 @@ async function handleBristol(interaction, googleSheets) {
         type: 'bm',
         value: `Bristol ${bristolNum}`,
         bristolScale: bristolNum,
-        notes: pending.notes || '',
+        notes: pendingClarification.notes || '',
         source: 'DM'
     });
 
@@ -509,11 +506,7 @@ async function requestMealTimeClarification(message, entryData) {
     const { buttonsMealTime } = require('../ui/components');
 
     // Store pending clarification
-    pendingClarifications.set(message.author.id, {
-        type: 'mealTime',
-        entryData: entryData,
-        timestamp: Date.now()
-    });
+    await pending.set(pending.keyFrom(message), { type: 'mealTime', entryData: entryData }, TTL_SECONDS);
 
     await message.reply({
         content: `${EMOJI.food} When did you have this?`,
@@ -529,11 +522,7 @@ async function requestBristolClarification(message, notes = '') {
     const { buttonsBristol } = require('../ui/components');
 
     // Store pending clarification
-    pendingClarifications.set(message.author.id, {
-        type: 'bristol',
-        notes: notes,
-        timestamp: Date.now()
-    });
+    await pending.set(pending.keyFrom(message), { type: 'bristol', notes: notes }, TTL_SECONDS);
 
     await message.reply({
         content: `${EMOJI.bm} I'll log this bowel movement. Can you provide more details?`,
@@ -605,20 +594,26 @@ You can manage your reminders and preferences with simple phrases:
 }
 
 
-// Cleanup expired pending clarifications every 5 minutes
-setInterval(() => {
-    const now = Date.now();
-    const TIMEOUT = 5 * 60 * 1000; // 5 minutes
-
-    // Note: pendingClarifications cleanup is handled by the database TTL
-    // No need to manually iterate through entries
-}, 5 * 60 * 1000);
+// Cleanup expired pending clarifications every 5 minutes - Handled by services/pending.js
+// setInterval(() => { }, 5 * 60 * 1000);
 
 module.exports = {
     handleButtonInteraction,
     requestSymptomClarification,
     requestMealTimeClarification,
     requestBristolClarification,
-    pendingClarifications,
     handleHelpButton,
 };
+
+Object.defineProperty(module.exports, 'pendingClarifications', {
+  get() {
+    throw new Error(
+      'DEPRECATED: pendingClarifications was removed. Use services/pending.js'
+    );
+  },
+  set() {
+    throw new Error('Cannot set deprecated export pendingClarifications');
+},
+  configurable: false,
+  enumerable: false,
+});
