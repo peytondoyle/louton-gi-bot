@@ -52,6 +52,18 @@ const DialogManager = require('./src/dialogs/DialogManager');
 const symptomLogDialog = require('./src/dialogs/symptomLogDialog');
 const ProactiveScheduler = require('./src/scheduler/proactiveScheduler');
 
+function buildSeverityButtons() {
+  return {
+    type: 1, // Action Row
+    components: [
+      { type: 2, style: 2, custom_id: "pmc.none",     label: "None"     },
+      { type: 2, style: 1, custom_id: "pmc.mild",     label: "Mild"     },
+      { type: 2, style: 1, custom_id: "pmc.moderate", label: "Moderate" },
+      { type: 2, style: 4, custom_id: "pmc.severe",   label: "Severe"   },
+    ],
+  };
+}
+
 // Calorie estimation
 const { estimateCaloriesForItemAndSides } = require('./src/nutrition/estimateCalories');
 const { getSheetName } = require('./src/utils/getSheetName');
@@ -1460,18 +1472,6 @@ function setupReminders() {
     });
 
     console.log(`✅ Reminders scheduled for ${morningTime} and ${eveningTime}`);
-}
-
-function buildSeverityButtons() {
-  return {
-    type: 1, // Action Row
-    components: [
-      { type: 2, style: 2, custom_id: "pmc.none",     label: "None"     },
-      { type: 2, style: 1, custom_id: "pmc.mild",     label: "Mild"     },
-      { type: 2, style: 1, custom_id: "pmc.moderate", label: "Moderate" },
-      { type: 2, style: 4, custom_id: "pmc.severe",   label: "Severe"   },
-    ],
-  };
 }
 
 // Error handling
