@@ -250,6 +250,11 @@ function rulesParse(text, options = {}) {
         result.slots.sides = extracted.sides;
     }
 
+    // Copy rescue metadata if present
+    if (extracted.rescuedBy) {
+        result.meta.rescuedBy = extracted.rescuedBy;
+    }
+
     // 5b. Check for secondary beverage intent
     if (extracted.secondaryBeverage) {
         result.slots._secondary = {
@@ -257,7 +262,7 @@ function rulesParse(text, options = {}) {
             item: extracted.secondaryBeverage,
             confidence: 0.85
         };
-        result.meta.secondaryDetected = true;
+        result.meta.secondaryDetected = extracted.secondaryDetected || true;
     }
 
     // 5c. Portion parsing
@@ -383,7 +388,8 @@ function extractItemAndSides(text, originalText) {
         item: null,
         sides: null,
         hasHeadNoun: false,
-        secondaryBeverage: null
+        secondaryBeverage: null,
+        secondaryDetected: false
     };
 
     try {
@@ -469,7 +475,7 @@ function extractItemAndSides(text, originalText) {
             for (const bev of ALL_BEVERAGES) {
                 if (sideChunk.toLowerCase().includes(bev)) {
                     result.secondaryBeverage = bev;
-                    result.meta.secondaryDetected = true;
+                    result.secondaryDetected = true;
                     console.log(`[NLU-V2] Secondary beverage detected: ${bev}`);
                     break;
                 }
@@ -484,7 +490,7 @@ function extractItemAndSides(text, originalText) {
                 result.item = sideItem;
                 result.sides = mainChunk; // Original main becomes side
                 result.hasHeadNoun = true;
-                result.meta.rescuedBy = 'swap_sides';
+                result.rescuedBy = 'swap_sides';
                 console.log(`[RESCUE] Swapped main/sides → chosen "${sideItem}"`);
             }
         }
@@ -493,11 +499,11 @@ function extractItemAndSides(text, originalText) {
         if (!result.item && result.secondaryBeverage) {
             result.item = result.secondaryBeverage;
             result.hasHeadNoun = true;
-            result.meta.rescuedBy = 'promote_beverage';
+            result.rescuedBy = 'promote_beverage';
             console.log(`[RESCUE] Promoted beverage to main: ${result.secondaryBeverage}`);
             // Clear secondary since it's now primary
             result.secondaryBeverage = null;
-            result.meta.secondaryDetected = false;
+            result.secondaryDetected = false;
         }
 
         // ========== STEP 8: Fallback to Compromise Noun Extraction ==========
