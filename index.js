@@ -308,7 +308,7 @@ async function handleNaturalLanguage(message) {
         const complexIntent = parseComplexIntent(text);
         if (complexIntent) {
             await handleComplexIntent(message, complexIntent);
-            return;
+        return;
         }
     }
 
@@ -900,7 +900,7 @@ async function logFromNLU(message, parseResult) {
     }
 
     const undoId = `${sheetName}:${rowIndex}`;
-    
+
     return { success: true, undoId: undoId, caloriesVal: caloriesVal, rowObj: rowObj };
 }
 
@@ -1174,7 +1174,7 @@ client.on('messageCreate', async (message) => {
         } catch (nluError) {
             console.error('[ROUTER] Unexpected NLU error:', nluError);
         }
-        
+
     } catch (err) {
         console.error('[ROUTER] ❌ Error in messageCreate handler:', err);
         // DO NOT send error to user - specific handlers already did
