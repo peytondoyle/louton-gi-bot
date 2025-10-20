@@ -56,7 +56,7 @@ const ProactiveScheduler = require('./src/scheduler/proactiveScheduler');
 const { estimateCaloriesForItemAndSides } = require('./src/nutrition/estimateCalories');
 
 // Reminders & preferences
-const { getUserPrefs, setUserPrefs } = require('./services/prefs');
+const { getUserProfile, updateUserProfile } = require('./services/userProfile');
 const { scheduleAll, updateUserSchedule } = require('./src/scheduler/reminders');
 const { scheduleContextualFollowups } = require('./src/handlers/contextualFollowups');
 const dndCommands = require('./src/commands/dnd');

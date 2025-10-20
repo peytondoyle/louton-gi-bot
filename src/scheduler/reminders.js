@@ -4,7 +4,7 @@
 
 const cron = require('node-cron');
 const moment = require('moment-timezone');
-const { getUserPrefs, listAllPrefs, setUserPrefs, isOnCooldown } = require('../../services/prefs');
+const { getUserProfile, updateUserProfile } = require('../../services/userProfile');
 const { shouldSuppressNow, computeNextSend } = require('../reminders/adaptive');
 const { startResponseWatcher } = require('../reminders/responseWatcher');
 const {
@@ -12,7 +12,6 @@ const {
     getSnoozeUntil,
     getReminderCooldown
 } = require('../reminders/dnd');
-const { getUserProfile, updateUserProfile } = require('../../services/userProfile');
 const time = require('../utils/time');
 
 // Active cron tasks per user: Map<userId, { morning, evening, inactivity }>

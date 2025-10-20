@@ -2,7 +2,6 @@
 // Processes all button clicks from clarifications, check-ins, and actions
 
 const { handleNaturalLanguage } = require('../../index');
-const { getSheetName } = require('../../utils/getSheetName');
 const { EMOJI, BUTTON_IDS } = require('../constants/ux');
 const { successEmbed, errorEmbed, buttonsSeverity, buttonsMealTime, buttonsBristol, buttonsSymptomType } = require('../ui/components');
 const contextMemory = require('../utils/contextMemory');
