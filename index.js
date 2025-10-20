@@ -409,17 +409,23 @@ async function handleNaturalLanguage(message) {
         } else {
             // Ask for missing slots via buttons
             await requestMissingSlots(message, result);
+            saveSucceeded = true; // Clarification sent, not an error
         }
     } catch (error) {
-        console.error('NLU Error:', error);
+        console.error('[NLU Error]:', error);
 
         // Only send error if save didn't succeed
         if (!saveSucceeded) {
-            await message.reply(`${EMOJI.error} ${getRandomPhrase(PHRASES.error)}`);
+            try {
+                await message.reply(`${EMOJI.error} ${getRandomPhrase(PHRASES.error)}`);
+            } catch (replyError) {
+                console.error('[NLU] Failed to send error message:', replyError);
+            }
         } else {
             console.warn('[NLU] Error after successful save (not shown to user):', error.message);
         }
     }
+    // NEVER throw from this function - always handle errors internally
 }
 
 /**
@@ -936,7 +942,13 @@ client.on('messageCreate', async (message) => {
         // ========== ROUTE 1: DM + No Prefix = NLU ==========
         if (isDM && !isCommand) {
             console.log('[ROUTER] ✅ Routing to NLU handler');
-            await handleNaturalLanguage(message);
+            try {
+                await handleNaturalLanguage(message);
+            } catch (nluError) {
+                // handleNaturalLanguage should never throw (handles errors internally)
+                // If it does, log but don't send duplicate error
+                console.error('[ROUTER] Unexpected NLU error (already handled internally):', nluError);
+            }
             return;
         }
 
@@ -979,13 +991,9 @@ client.on('messageCreate', async (message) => {
 
     } catch (err) {
         console.error('[ROUTER] ❌ Error in messageCreate handler:', err);
-        try {
-            if (!message.author.bot) {
-                await message.reply('😅 Oops — something went wrong handling that message. Please try again or use a command like `!help`.');
-            }
-        } catch (replyErr) {
-            console.error('[ROUTER] ❌ Failed to send error message:', replyErr);
-        }
+        // DO NOT send error to user - specific handlers already did
+        // This catch is only for logging catastrophic failures
+        console.warn('[ROUTER] Top-level catch fired - errors should be handled by specific handlers');
     }
 });
 
