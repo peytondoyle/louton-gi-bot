@@ -180,7 +180,7 @@ client.once('clientReady', async () => {
         console.log('✅ Connected to Google Sheets');
 
         // Ensure User_Profiles sheet exists before other tabs
-        await ensureProfileSheet();
+        await ensureProfileSheet(googleSheets);
 
         // Ensure tabs exist for multi-user support
         console.log('🔧 Ensuring user tabs exist...');

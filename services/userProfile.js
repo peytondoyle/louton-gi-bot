@@ -1,4 +1,4 @@
-const { a1, getSheet, batchUpdate } = require('./googleBase');
+const { a1, getSheet: getSheetFromGoogleBase, batchUpdate } = require('./googleBase');
 
 const PROFILE_SHEET_NAME = 'User_Profiles';
 const PROFILE_SHEET_GID = process.env.USER_PROFILES_SHEET_GID || '123456789'; // Replace with a real GID in your .env for persistence
@@ -8,21 +8,56 @@ const profileCache = new Map();
 
 /**
  * Ensures the User_Profiles sheet exists with the correct headers.
+ * @param {object} googleSheets - The authenticated Google Sheets instance.
  */
-async function ensureProfileSheet() {
+async function ensureProfileSheet(googleSheets) {
     const headers = ['UserID', 'ProfileJSON', 'LastUpdated'];
     const sheetTitle = PROFILE_SHEET_NAME;
 
     try {
-        const sheet = await getSheet(sheetTitle);
+        const sheet = await googleSheets._getSheet(sheetTitle); // Use internal method to check sheet existence
         if (!sheet) {
             console.log(`[USER_PROFILE] Creating sheet: ${sheetTitle}`);
-            // Sheet doesn't exist, create it. This part requires manual setup or more complex API calls.
-            // For now, we assume the sheet is created manually with the GID.
-            // A truly robust solution would use spreadsheets.create and store the new sheetId.
-            console.warn(`[USER_PROFILE] Please ensure a sheet named '${sheetTitle}' with GID '${PROFILE_SHEET_GID}' exists.`);
+            // Attempt to create the sheet using batchUpdate
+            const requests = [{
+                addSheet: {
+                    properties: {
+                        title: sheetTitle,
+                        gridProperties: {
+                            rowCount: 1, // Start with one row for headers
+                            columnCount: headers.length,
+                        }
+                    }
+                }
+            }];
+            await googleSheets.sheets.spreadsheets.batchUpdate({
+                spreadsheetId: process.env.GOOGLE_SHEETS_ID,
+                resource: { requests }
+            });
+            console.log(`[USER_PROFILE] Successfully created sheet: ${sheetTitle}`);
+
+            // Add headers to the newly created sheet
+            await googleSheets.sheets.spreadsheets.values.update({
+                spreadsheetId: process.env.GOOGLE_SHEETS_ID,
+                range: `${sheetTitle}!A1`,
+                valueInputOption: 'USER_ENTERED',
+                resource: { values: [headers] },
+            });
+            console.log(`[USER_PROFILE] Added headers to ${sheetTitle}`);
+
+        } else {
+            // Sheet exists, ensure headers are present (simplified for now)
+            const existingHeaders = await googleSheets.sheets.spreadsheets.values.get({
+                spreadsheetId: process.env.GOOGLE_SHEETS_ID,
+                range: `${sheetTitle}!1:1`
+            });
+            const currentHeaders = existingHeaders.data.values ? existingHeaders.data.values[0] : [];
+            const missingHeaders = headers.filter(h => !currentHeaders.includes(h));
+            if (missingHeaders.length > 0) {
+                console.warn(`[USER_PROFILE] Missing headers in ${sheetTitle}: ${missingHeaders.join(', ')}. Please add them manually or consider a more robust header update mechanism.`);
+                // For now, we don't auto-add missing headers to existing sheets to avoid data shifts.
+            }
         }
-        // Header check can be added here if needed
     } catch (error) {
         console.error(`[USER_PROFILE] Error ensuring profile sheet exists: ${error.message}`);
     }
