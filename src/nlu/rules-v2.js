@@ -591,7 +591,7 @@ function extractItemAndSides(text, originalText) {
         }
 
         // Set sides
-        if (sideChunk && !result.secondaryBeverage) {
+        if (sideChunk) {
             result.sides = sideChunk;
         }
 

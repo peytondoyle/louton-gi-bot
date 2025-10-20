@@ -416,7 +416,14 @@ async function handleNaturalLanguage(message) {
         // Handle based on whether we have missing slots
         if (result.missing.length === 0) {
             // All slots present - log immediately
-            saveSucceeded = await logFromNLU(message, result);
+            const logResult = await logFromNLU(message, result);
+            saveSucceeded = logResult.success;
+
+            if (saveSucceeded) {
+                // Fire and forget post-save actions
+                postLogActions(message, result, logResult.undoId, logResult.caloriesVal);
+            }
+
         } else {
             // Ask for missing slots via buttons
             await requestMissingSlots(message, result);
@@ -437,6 +444,79 @@ async function handleNaturalLanguage(message) {
         }
     }
     // NEVER throw from this function - always handle errors internally
+}
+
+/**
+ * Handles all the "fire-and-forget" actions that should happen after a log is successfully saved.
+ * This includes sending confirmation messages, follow-ups, and background context updates.
+ * This function should never throw an error.
+ */
+async function postLogActions(message, parseResult, undoId, caloriesVal) {
+    const { intent, slots } = parseResult;
+    const userId = message.author.id;
+    const isPeyton = (userId === PEYTON_ID);
+
+    // 1. Send Success Message
+    try {
+        let confirmText = '';
+        const emoji = getTypeEmoji(intent);
+        const details = (parseResult.slots.item || parseResult.slots.symptom_type || intent).trim();
+
+        if (intent === 'food' || intent === 'drink') {
+            if (isPeyton && caloriesVal != null && caloriesVal > 0) {
+                confirmText = `✅ Logged **${details}** — ≈${caloriesVal} kcal.`;
+            } else {
+                confirmText = `✅ Logged **${details}**.`;
+            }
+        } else {
+            confirmText = `${emoji} Logged **${details}**.`;
+        }
+
+        const chips = buildPostLogChips({ undoId, intent });
+        await message.reply({ content: confirmText, components: chips });
+    } catch (e) {
+        console.error('[postLogActions] Error sending success message:', e);
+    }
+
+    // 2. Ask Follow-up Question
+    if (intent === 'food' || intent === 'drink') {
+        try {
+            await message.channel.send("How are you feeling after that?");
+            contextMemory.setPendingContext(userId, 'expecting_symptom_follow_up', {
+                linkedItem: slots.item
+            }, 600); // 10 minute TTL
+        } catch (e) {
+            console.warn('[postLogActions] Error sending follow-up question:', e.message);
+        }
+    }
+
+    // 3. Dispatch Background Tasks
+    setImmediate(() => {
+        try {
+            contextMemory.push(userId, {
+                type: intent,
+                details: slots.item || slots.symptom_type || intent,
+                severity: slots.severity ? mapSeverityToLabel(slots.severity) : '',
+                timestamp: Date.now()
+            });
+
+            if (intent === 'symptom' || intent === 'reflux') {
+                scheduleSymptomFollowup(userId).catch(e => console.warn('[POSTSAVE][warn] followup:', e.message));
+            }
+
+            if (parseResult.multi_actions && parseResult.multi_actions.length > 0) {
+                for (const action of parseResult.multi_actions) {
+                    delete action.multi_actions;
+                    setTimeout(() => {
+                        logFromNLU(message, action).catch(e => console.error('[Multi-Action] Error logging sub-action:', e));
+                    }, 500);
+                }
+            }
+            console.log('[SAVE] ✅ Post-save background tasks dispatched');
+        } catch(e) {
+            console.error('[postLogActions] Error in background tasks:', e);
+        }
+    });
 }
 
 /**
@@ -643,12 +723,11 @@ async function logFromNLU(message, parseResult) {
 
     if (!result.success) {
         await message.reply(`${EMOJI.error} ${result.error.userMessage}`);
-        return false; // Save failed
+        return { success: false }; // Save failed
     }
 
     console.log(`[SAVE] ✅ Successfully appended to ${sheetName}`);
 
-    // ========== 2. POST-SAVE: WRAPPED TO NEVER THROW ==========
     // Build undo reference safely
     let rowIndex = result.rowIndex || 2;
     try {
@@ -662,120 +741,10 @@ async function logFromNLU(message, parseResult) {
     }
 
     const undoId = `${sheetName}:${rowIndex}`;
-
-    // ========== SEND SUCCESS MESSAGE (ALWAYS, even if chips fail) ==========
-    let confirmText = '';
-    const emoji = getTypeEmoji(intent);
-
-    if (intent === 'food' || intent === 'drink') {
-        if (isPeyton && caloriesVal != null && caloriesVal > 0) {
-            confirmText = `✅ Logged **${rowObj.Details}** — ≈${caloriesVal} kcal.`;
-        } else if (isPeyton && caloriesVal == null) {
-            confirmText = `✅ Logged **${rowObj.Details}** (calories pending).`;
-        } else {
-            confirmText = `✅ Logged **${rowObj.Details}**.`;
-        }
-    } else {
-        // BM, symptom, reflux
-        confirmText = `${emoji} Logged **${rowObj.Details}**.`;
-    }
-
-    // ========== 3. SEND SUCCESS MESSAGE (Critical) ==========
-    try {
-        const chips = buildPostLogChips({ undoId, intent });
-        await message.reply({
-            content: confirmText,
-            components: chips
-        });
-        console.log(`[UI] ✅ Success message sent with chips`);
-    } catch (chipError) {
-        console.warn('[UI] Chips failed, sending plain success:', chipError.message);
-        try {
-            await message.reply({ content: confirmText });
-            console.log('[UI] ✅ Success message sent (plain)');
-        } catch (plainError) {
-            console.error('[UI] Failed to send any success message:', plainError);
-            // Continue - save succeeded even if we can't message user
-        }
-    }
-
-    // After logging food/drink, ask a follow-up question and set context
-    if (intent === 'food' || intent === 'drink') {
-        try {
-            await message.channel.send("How are you feeling after that?");
-            contextMemory.setPendingContext(userId, 'expecting_symptom_follow_up', {
-                linkedItem: rowObj.Details
-            }, 600); // 10 minute TTL for follow-up
-        } catch (e) {
-            console.warn('[POSTSAVE][warn] followup question:', e.message);
-        }
-    }
-
-    // ========== 4. RETURN TRUE IMMEDIATELY (Success guaranteed) ==========
-    // Spawn post-save work in background - NEVER await, NEVER throw
-    setImmediate(() => {
-        // Context memory
-        try {
-            contextMemory.push(userId, {
-                type: intent,
-                details: rowObj.Details,
-                severity: rowObj.Severity,
-                timestamp: Date.now()
-            });
-        } catch (e) {
-            console.warn('[POSTSAVE][warn] context:', e.message);
-        }
-
-        // Trigger warnings
-        if (intent === 'food' || intent === 'drink') {
-            checkTriggerWarning(message, userId, rowObj.Details)
-                .catch(e => console.warn('[POSTSAVE][warn] trigger:', e.message));
-        }
-
-        // Contextual follow-ups
-        (async () => {
-            try {
-                const userPrefs = await getUserPrefs(userId, googleSheets);
-                const tz = userPrefs.TZ || TIMEZONE;
-                await scheduleContextualFollowups({
-                    googleSheets,
-                    message,
-                    parseResult: { intent, slots },
-                    tz,
-                    userId,
-                    userPrefs
-                });
-            } catch (e) {
-                console.warn('[POSTSAVE][warn] followups:', e.message);
-            }
-        })();
-
-        // Symptom-specific
-        if (intent === 'symptom' || intent === 'reflux') {
-            offerTriggerLink(message, userId).catch(e => console.warn('[POSTSAVE][warn] link:', e.message));
-            checkRoughPatch(message, userId).catch(e => console.warn('[POSTSAVE][warn] patch:', e.message));
-            surfaceTrendChip(message, userTag, userId).catch(e => console.warn('[POSTSAVE][warn] trend:', e.message));
-            scheduleSymptomFollowup(userId).catch(e => console.warn('[POSTSAVE][warn] followup:', e.message));
-        }
-
-        // Handle multi-actions from LLM
-        if (parseResult.multi_actions && parseResult.multi_actions.length > 0) {
-            console.log(`[Multi-Action] Processing ${parseResult.multi_actions.length} additional actions...`);
-            for (const action of parseResult.multi_actions) {
-                // To prevent infinite loops, don't re-process multi-actions within a multi-action
-                delete action.multi_actions;
-                // Log each subsequent action with a small delay
-                setTimeout(() => {
-                    logFromNLU(message, action).catch(e => console.error('[Multi-Action] Error logging sub-action:', e));
-                }, 500);
-            }
-        }
-
-        console.log('[SAVE] ✅ Post-save background tasks dispatched');
-    });
-
-    return true; // Save succeeded - return BEFORE background tasks complete
+    
+    return { success: true, undoId: undoId, caloriesVal: caloriesVal, rowObj: rowObj };
 }
+
 
 /**
  * Request missing slots from user via buttons
