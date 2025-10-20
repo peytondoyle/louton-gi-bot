@@ -564,36 +564,24 @@ async function logFromNLU(message, parseResult) {
 
     console.log(`[SAVE] ✅ Successfully appended to ${sheetName}`);
 
-    // ========== POST-SAVE OPERATIONS (wrapped to prevent false errors) ==========
-    try {
-        // Build undo reference (format: sheetName:rowIndex)
-        let rowIndex = result.rowIndex;
-        if (!rowIndex) {
-            try {
-                const rowsResult = await googleSheets.getRows({}, sheetName);
-                rowIndex = rowsResult?.rows?.length ? rowsResult.rows.length + 1 : 2;
-            } catch (e) {
-                rowIndex = 2; // Safe fallback
-                console.warn('[UNDO] Could not determine row index, using fallback');
-            }
+    // ========== BUILD UNDO REFERENCE (Safe, with fallbacks) ==========
+    let rowIndex = result.rowIndex;
+    if (!rowIndex) {
+        try {
+            const rowsResult = await googleSheets.getRows({}, sheetName);
+            rowIndex = rowsResult?.rows?.length ? rowsResult.rows.length + 1 : 2;
+        } catch (e) {
+            rowIndex = 2; // Safe fallback
+            console.warn('[UNDO] Could not determine row index, using fallback');
         }
-        const undoId = `${sheetName}:${rowIndex}`;
+    }
+    const undoId = `${sheetName}:${rowIndex}`;
 
-        // Add to context memory
-        contextMemory.push(userId, {
-            type: intent,
-            details: rowObj.Details,
-            severity: rowObj.Severity,
-            timestamp: Date.now()
-        });
+    // ========== SEND SUCCESS MESSAGE (ALWAYS, even if chips fail) ==========
+    let confirmText = '';
+    const emoji = getTypeEmoji(intent);
 
-        // ========== PHASE 2: POST-LOG CHIPS ==========
-        // Show quick-action chips after successful log
-        const chips = buildPostLogChips({ undoId, intent });
-
-    // UI polish: Success response with calories for Peyton
     if (intent === 'food' || intent === 'drink') {
-        let confirmText = '';
         if (isPeyton && caloriesVal != null && caloriesVal > 0) {
             confirmText = `✅ Logged **${rowObj.Details}** — ≈${caloriesVal} kcal.`;
         } else if (isPeyton && caloriesVal == null) {
@@ -601,26 +589,56 @@ async function logFromNLU(message, parseResult) {
         } else {
             confirmText = `✅ Logged **${rowObj.Details}**.`;
         }
+    } else {
+        // BM, symptom, reflux
+        confirmText = `${emoji} Logged **${rowObj.Details}**.`;
+    }
 
-        await message.reply({
+    // Send success message IMMEDIATELY (before any chips/followups)
+    let sentMessage = null;
+    try {
+        const chips = buildPostLogChips({ undoId, intent });
+        sentMessage = await message.reply({
             content: confirmText,
             components: chips
         });
-
-        // Check for trigger warning
-        await checkTriggerWarning(message, userId, rowObj.Details);
-        return;
+        console.log('[UI] ✅ Success message sent with chips');
+    } catch (chipError) {
+        // Chips failed, send without chips
+        console.warn('[UI] Chips failed, sending plain success:', chipError.message);
+        try {
+            sentMessage = await message.reply({ content: confirmText });
+        } catch (fallbackError) {
+            console.error('[UI] Even fallback failed:', fallbackError);
+            // At this point, save worked but we can't message user - log it
+        }
     }
 
-    // For symptoms/reflux/bm - standard response with chips
-    const emoji = getTypeEmoji(intent);
-    await message.reply({
-        content: `${emoji} Logged **${rowObj.Details}**.`,
-        components: chips
-    });
+    // ========== POST-SUCCESS NON-FATAL OPERATIONS ==========
+    // Wrap each in its own try-catch - failures are warnings, not errors
 
-    // ========== PHASE 4: CONTEXTUAL FOLLOW-UPS ==========
-    // Schedule adaptive follow-ups based on what was logged
+    // Add to context memory
+    try {
+        contextMemory.push(userId, {
+            type: intent,
+            details: rowObj.Details,
+            severity: rowObj.Severity,
+            timestamp: Date.now()
+        });
+    } catch (e) {
+        console.warn('[POSTSAVE] Context memory failed:', e.message);
+    }
+
+    // Trigger warnings (food/drink only)
+    if (intent === 'food' || intent === 'drink') {
+        try {
+            await checkTriggerWarning(message, userId, rowObj.Details);
+        } catch (e) {
+            console.warn('[POSTSAVE] Trigger warning failed:', e.message);
+        }
+    }
+
+    // Contextual follow-ups
     try {
         const userPrefs = await getUserPrefs(userId, googleSheets);
         const tz = userPrefs.TZ || TIMEZONE;
@@ -633,25 +651,38 @@ async function logFromNLU(message, parseResult) {
             userId,
             userPrefs
         });
-    } catch (error) {
-        console.error('[FOLLOWUP] Error scheduling contextual follow-ups:', error);
+    } catch (e) {
+        console.warn('[POSTSAVE] Contextual followups failed:', e.message);
     }
 
-        // Check for trigger linking (if symptom/reflux)
-        if (intent === 'symptom' || intent === 'reflux') {
+    // Trigger linking (symptom/reflux only)
+    if (intent === 'symptom' || intent === 'reflux') {
+        try {
             await offerTriggerLink(message, userId);
-            await checkRoughPatch(message, userId);
-            await surfaceTrendChip(message, userTag, userId);
-
-            // Schedule a follow-up DM in 90-150 minutes
-            await scheduleSymptomFollowup(userId);
+        } catch (e) {
+            console.warn('[POSTSAVE] Trigger link failed:', e.message);
         }
 
-    } catch (postSaveError) {
-        console.error('[SAVE] Post-save operation failed (log was successful):', postSaveError);
-        // Do NOT send error to user - the save succeeded, just chips/context failed
-        // User already got success confirmation above
+        try {
+            await checkRoughPatch(message, userId);
+        } catch (e) {
+            console.warn('[POSTSAVE] Rough patch check failed:', e.message);
+        }
+
+        try {
+            await surfaceTrendChip(message, userTag, userId);
+        } catch (e) {
+            console.warn('[POSTSAVE] Trend chip failed:', e.message);
+        }
+
+        try {
+            await scheduleSymptomFollowup(userId);
+        } catch (e) {
+            console.warn('[POSTSAVE] Symptom followup failed:', e.message);
+        }
     }
+
+    console.log('[SAVE] ✅ Post-save operations complete');
 }
 
 /**
