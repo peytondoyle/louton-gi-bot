@@ -529,7 +529,15 @@ async function logFromNLU(message, parseResult) {
     }
 
     // Build undo reference (format: sheetName:rowIndex)
-    const rowIndex = result.rowIndex || (await googleSheets.getRows({}, sheetName)).rows.length + 1;
+    let rowIndex = result.rowIndex;
+    if (!rowIndex) {
+        try {
+            const rowsResult = await googleSheets.getRows({}, sheetName);
+            rowIndex = rowsResult?.rows?.length ? rowsResult.rows.length + 1 : 2; // Default to 2 if unknown
+        } catch (e) {
+            rowIndex = 2; // Safe fallback
+        }
+    }
     const undoId = `${sheetName}:${rowIndex}`;
 
     // Add to context memory
