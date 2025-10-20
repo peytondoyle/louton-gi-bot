@@ -338,6 +338,30 @@ function rulesParse(text, options = {}) {
         return result;
     }
 
+    // ========== 6b. NOUN-ONLY MEAL PATTERN (Relaxed) ==========
+    // Handle "egg bite breakfast" without verb
+    const hasVerb = INTENT_KEYWORDS.food.some(word => cleanedLower.includes(word)) ||
+                    INTENT_KEYWORDS.drink.some(word => cleanedLower.includes(word));
+
+    const hasFoodWords = result.slots.item ||
+                         result.meta.hasHeadNoun ||
+                         isMinimalCoreFood(cleanedLower);
+
+    const hasMealTime = result.slots.meal_time || result.slots.time;
+
+    if (!hasVerb && hasFoodWords && hasMealTime && result.intent === "other") {
+        result.intent = "food";
+        result.confidence = 0.85;
+        result.meta.nounOnlyMealPattern = true;
+        console.log('[NLU-V2] Noun-only meal pattern detected (no verb, but has food + meal time)');
+
+        if (!result.slots.item) {
+            result.missing.push("item");
+        }
+
+        return result;
+    }
+
     // ========== 7. FALLBACK ==========
     result.intent = "other";
     result.confidence = 0.3;
