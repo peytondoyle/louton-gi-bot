@@ -1,3 +1,3 @@
-run = "npm start"
 language = "nodejs"
-hidden = [".env", ".data", "node_modules", ".git"]
+run = "bash start.sh"
+hidden = [".env", ".data"]
