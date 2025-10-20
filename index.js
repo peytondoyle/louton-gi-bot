@@ -75,6 +75,8 @@ Message.prototype.reply = function (content, options) {
 console.log('✅ Patched Message.prototype.reply() → clean sends (no gray bar)');
 // ======================================================
 
+const recentMessageIds = new Set();
+
 // Initialize Discord client with DM support
 const client = new Client({
     intents: [
