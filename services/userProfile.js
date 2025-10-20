@@ -42,7 +42,7 @@ async function getUserProfile(userId, googleSheets) {
 
     try {
         const range = `${PROFILE_SHEET_NAME}!A:C`;
-        const response = await googleSheets.spreadsheets.values.get({
+        const response = await googleSheets.sheets.spreadsheets.values.get({
             spreadsheetId: process.env.SPREADSHEET_ID,
             range,
         });
@@ -123,7 +123,7 @@ async function updateUserProfile(userId, profileData, googleSheets) {
 
     try {
         const range = `${PROFILE_SHEET_NAME}!A:C`;
-        const response = await googleSheets.spreadsheets.values.get({
+        const response = await googleSheets.sheets.spreadsheets.values.get({
             spreadsheetId: process.env.SPREADSHEET_ID,
             range,
         });
@@ -135,7 +135,7 @@ async function updateUserProfile(userId, profileData, googleSheets) {
         if (rowIndex !== -1) {
             // User exists, update their row
             targetRange = `${PROFILE_SHEET_NAME}!A${rowIndex + 1}`;
-            await googleSheets.spreadsheets.values.update({
+            await googleSheets.sheets.spreadsheets.values.update({
                 spreadsheetId: process.env.SPREADSHEET_ID,
                 range: targetRange,
                 valueInputOption: 'USER_ENTERED',
@@ -143,7 +143,7 @@ async function updateUserProfile(userId, profileData, googleSheets) {
             });
         } else {
             // User does not exist, append a new row
-            await googleSheets.spreadsheets.values.append({
+            await googleSheets.sheets.spreadsheets.values.append({
                 spreadsheetId: process.env.SPREADSHEET_ID,
                 range: `${PROFILE_SHEET_NAME}!A1`,
                 valueInputOption: 'USER_ENTERED',

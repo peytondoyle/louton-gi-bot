@@ -167,7 +167,7 @@ client.on('raw', (packet) => {
 });
 
 // Bot ready event
-client.once('ready', async () => {
+client.once('clientReady', async () => {
     const timestamp = time.now(TIMEZONE).format('YYYY-MM-DD HH:mm:ss');
 
     console.log(`✅ Louton GI Bot is online as ${client.user.tag}`);
@@ -1386,4 +1386,4 @@ client.login(DISCORD_TOKEN)
         process.exit(1);
     });
 
-module.exports = { handleNaturalLanguage };
+// module.exports = { handleNaturalLanguage }; // Removed to fix circular dependency
