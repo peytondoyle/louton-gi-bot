@@ -24,21 +24,18 @@ const { getWindowStartTime } = require('./src/nlu/ontology');
 const { record: recordNLUMetrics } = require('./src/nlu/metrics-v2');
 const { postprocess } = require('./src/nlu/postprocess');
 
-// Command Palette System
-const { handleHelpPalette } = require('./src/commands/helpPalette');
-const { CommandRegistry } = require('./src/commands/registry');
-
 // Charts System
 const { handleChart } = require('./src/commands/chart');
 const { handleChartsMenu, handleChartButton } = require('./src/commands/chartsMenu');
 
 // UX System imports
 const { EMOJI, PHRASES, getRandomPhrase, BUTTON_IDS } = require('./src/constants/ux');
-const { buttonsSeverity, buttonsMealTime, buttonsBristol, buttonsSymptomType, trendChip, buttonsIntentClarification } = require('./src/ui/components');
+const { buttonsSeverity, buttonsMealTime, buttonsBristol, buttonsSymptomType, trendChip, buttonsIntentClarification, buildConversationalHelp } = require('./src/ui/components');
 const { buildPostLogChips } = require('./src/ui/chips');
 const contextMemory = require('./src/utils/contextMemory');
 const digests = require('./src/scheduler/digests');
 const buttonHandlers = require('./src/handlers/buttonHandlers');
+const { handleHelpButton } = require('./src/handlers/buttonHandlers'); // Explicit import
 const uxButtons = require('./src/handlers/uxButtons');
 const { isDuplicate } = require('./src/utils/dedupe');
 const { validateQuality } = require('./src/utils/qualityCheck');
@@ -234,6 +231,12 @@ client.on('interactionCreate', async (interaction) => {
         await markInteracted(userId, profile.prefs, googleSheets);
     }
 
+    // Route help buttons
+    if (interaction.customId.startsWith('help:')) {
+        await handleHelpButton(interaction);
+        return;
+    }
+
     // Route chart buttons
     if (interaction.customId.startsWith('chart:')) {
         const chartDeps = {
@@ -415,9 +418,7 @@ async function handleNaturalLanguage(message) {
 
         // Handle utility intents
         if (result.intent === 'help') {
-            // Modify the message content to be empty for the palette
-            const syntheticMessage = { ...message, content: '' };
-            await handleHelpPalette(syntheticMessage);
+            await handleHelp(message);
             return;
         }
         if (result.intent === 'undo') {
@@ -580,7 +581,18 @@ async function handleQuestion(message, query) {
 }
 
 /**
+ * Sends the new conversational help message.
+ * @param {import('discord.js').Message} message The Discord message object.
+ */
+async function handleHelp(message) {
+    const helpPayload = buildConversationalHelp();
+    await message.reply(helpPayload);
+}
+
+
+/**
  * Asks the user to clarify their intent when NLU is unsure.
+ * @param {import('discord.js').Message} message The Discord message object.
  */
 async function requestIntentClarification(message) {
     // Store the original message content for later processing

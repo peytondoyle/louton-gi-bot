@@ -354,6 +354,59 @@ function cautionEmbed(message) {
     });
 }
 
+/**
+ * Builds the main conversational help embed and buttons.
+ * @returns {{embeds: import('discord.js').EmbedBuilder[], components: import('discord.js').ActionRowBuilder[]}}
+ */
+function buildConversationalHelp() {
+    const helpEmbed = new EmbedBuilder()
+        .setColor('#5865F2') // Discord blurple
+        .setTitle('👋 Hi there! I\'m your conversational GI tracker.')
+        .setDescription(
+            "You can talk to me just like you're sending a text. Here are the main things I can do:"
+        )
+        .addFields(
+            {
+                name: '📝 Log Anything',
+                value: 'Just tell me what you ate, what symptoms you\'re feeling, or how your mood is.\n*e.g., "I had a big salad for lunch"*\n*e.g., "Ugh, I have a bad headache"*',
+                inline: false,
+            },
+            {
+                name: '🧠 Ask Me Questions',
+                value: 'I can analyze your data and give you answers in plain English.\n*e.g., "How many times did I have reflux last week?"*\n*e.g., "What did I eat before I got bloated on Tuesday?"*',
+                inline: false,
+            },
+            {
+                name: '⚙️ Manage Your Settings',
+                value: 'You can control your reminders and preferences just by asking.\n*e.g., "Turn on my reminders" or "Show me my settings"*',
+                inline: false,
+            }
+        )
+        .setFooter({ text: 'Click the buttons below for more examples!' });
+
+    const helpButtons = new ActionRowBuilder()
+        .addComponents(
+            new ButtonBuilder()
+                .setCustomId(BUTTON_IDS.helpLogging)
+                .setLabel('Logging Examples')
+                .setStyle(ButtonStyle.Primary)
+                .setEmoji('💡'),
+            new ButtonBuilder()
+                .setCustomId(BUTTON_IDS.helpAsking)
+                .setLabel('Asking Questions')
+                .setStyle(ButtonStyle.Primary)
+                .setEmoji('❓'),
+            new ButtonBuilder()
+                .setCustomId(BUTTON_IDS.helpSettings)
+                .setLabel('My Settings')
+                .setStyle(ButtonStyle.Secondary)
+                .setEmoji('⚙️'),
+        );
+
+    return { embeds: [helpEmbed], components: [helpButtons] };
+}
+
+
 module.exports = {
     buildEmbed,
     divider,
@@ -367,5 +420,6 @@ module.exports = {
     buttonDismiss,
     successEmbed,
     errorEmbed,
-    cautionEmbed
+    cautionEmbed,
+    buildConversationalHelp
 };

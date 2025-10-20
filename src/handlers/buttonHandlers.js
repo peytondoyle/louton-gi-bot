@@ -4,6 +4,7 @@
 const { BUTTON_IDS, EMOJI, getRandomPhrase, PHRASES, formatPhrase } = require('../constants/ux');
 const { successEmbed, errorEmbed, buttonsSeverity, buttonsMealTime } = require('../ui/components');
 const contextMemory = require('../utils/contextMemory');
+const { EmbedBuilder } = require('discord.js');
 
 // Store pending clarifications awaiting secondary input
 // userId -> { type, data, timestamp }
@@ -37,6 +38,8 @@ async function handleButtonInteraction(interaction, googleSheets, digests) {
             await handleUndo(interaction, googleSheets);
         } else if (customId === BUTTON_IDS.dismiss) {
             await interaction.message.delete();
+        } else if (customId.startsWith('help_')) {
+            await handleHelpButton(interaction);
         }
     } catch (error) {
         console.error(`Error handling button interaction ${customId}:`, error);
@@ -502,6 +505,70 @@ async function requestBristolClarification(message, notes = '') {
     });
 }
 
+/**
+ * Handles clicks on the buttons from the new conversational help system.
+ * Sends an ephemeral message with detailed examples for the chosen topic.
+ * @param {import('discord.js').ButtonInteraction} interaction - The button interaction.
+ */
+async function handleHelpButton(interaction) {
+    const topic = interaction.customId.split(':')[1];
+
+    let title = '';
+    let content = '';
+
+    switch (topic) {
+        case 'logging':
+            title = '💡 Logging Examples';
+            content = `
+You can log any of these things just by saying them:
+- **Foods & Drinks:** \`"I had a banana and oat milk for breakfast"\`
+- **Symptoms:** \`"log a mild stomach ache"\` or \`"I have some bad reflux"\`
+- **Bowel Movements:** \`"log a BM, bristol 4"\`
+- **Mood & Energy:** \`"I'm feeling really energetic today"\` or \`"feeling tired"\`
+
+**Advanced Logging:**
+- **With Sides:** \`"A smoothie with protein powder and berries"\`
+- **Learned Meals:** \`"I had my usual morning coffee"\` (uses your learned calorie count!)
+- **Follow-ups:** After I ask how you're feeling, you can just say \`"better"\` or \`"a little bloated"\`.
+            `;
+            break;
+        case 'asking':
+            title = '❓ Asking Questions';
+            content = `
+I can search and analyze your logs. Just ask me a question in plain English:
+- \`"How many times did I have reflux last week?"\`
+- \`"What did I eat before I got bloated on Tuesday?"\`
+- \`"Show me all the times I logged coffee."\`
+- \`"What was my average symptom severity last month?"\`
+            `;
+            break;
+        case 'settings':
+            title = '⚙️ Managing Your Settings';
+            content = `
+You can manage your reminders and preferences with simple phrases:
+- \`"show me my settings"\` to see your current configuration.
+- \`"turn reminders on"\` or \`"turn reminders off"\`
+- \`"set my morning check-in for 8:30am"\`
+- \`"disable the evening recap"\`
+- \`"change my timezone to America/New_York"\`
+            `;
+            break;
+        default:
+            return interaction.reply({ content: 'Sorry, I don\'t recognize that help topic.', ephemeral: true });
+    }
+
+    const helpEmbed = new EmbedBuilder()
+        .setTitle(title)
+        .setDescription(content.trim())
+        .setColor('#5865F2');
+
+    await interaction.reply({
+        embeds: [helpEmbed],
+        ephemeral: true // This makes the message visible only to the user who clicked
+    });
+}
+
+
 // Cleanup expired pending clarifications every 5 minutes
 setInterval(() => {
     const now = Date.now();
@@ -519,5 +586,6 @@ module.exports = {
     requestSymptomClarification,
     requestMealTimeClarification,
     requestBristolClarification,
-    pendingClarifications
+    pendingClarifications,
+    handleHelpButton,
 };

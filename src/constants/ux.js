@@ -99,7 +99,12 @@ const BUTTON_IDS = {
         log_food: 'intent_log_food',
         log_symptom: 'intent_log_symptom',
         cancel: 'intent_cancel'
-    }
+    },
+
+    // --- Conversational Help System ---
+    helpLogging: 'help:logging',
+    helpAsking: 'help:asking',
+    helpSettings: 'help:settings',
 };
 
 // Button Labels
