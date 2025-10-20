@@ -673,6 +673,20 @@ class GoogleSheetsService {
      * @param {string} sheetName - Name of the sheet
      * @param {Array<string>} headersArray - Required headers
      */
+    async _getSheet(sheetTitle) {
+        try {
+            const response = await this.sheets.spreadsheets.get({
+                spreadsheetId: this.spreadsheetId
+            });
+            
+            const sheet = response.data.sheets.find(s => s.properties.title === sheetTitle);
+            return sheet;
+        } catch (error) {
+            console.error(`Error getting sheet "${sheetTitle}":`, error.message);
+            return null;
+        }
+    }
+
     async ensureSheetAndHeaders(sheetTitle, requiredHeaders) {
         await this.initialize();
         const sheet = await this._getSheet(sheetTitle);

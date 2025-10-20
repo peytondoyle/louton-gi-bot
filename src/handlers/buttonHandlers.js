@@ -610,11 +610,8 @@ setInterval(() => {
     const now = Date.now();
     const TIMEOUT = 5 * 60 * 1000; // 5 minutes
 
-    for (const [userId, data] of pendingClarifications.entries()) {
-        if (now - data.timestamp > TIMEOUT) {
-            pendingClarifications.delete(userId);
-        }
-    }
+    // Note: pendingClarifications cleanup is handled by the database TTL
+    // No need to manually iterate through entries
 }, 5 * 60 * 1000);
 
 module.exports = {
