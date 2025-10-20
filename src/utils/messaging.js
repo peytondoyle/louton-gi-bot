@@ -19,11 +19,11 @@ async function sendCleanReply(message, content, options = {}) {
 
     // Handle string content
     if (typeof content === 'string') {
-      payload = prefix + content;
+      payload = { content: prefix + content, ...options }; // Merge options for string content
     }
     // Handle embed or object content
     else if (typeof content === 'object' && !Array.isArray(content)) {
-      payload = { ...content };
+      payload = { ...content, ...options }; // Merge content and options
       // Only add prefix to content if it exists
       if (payload.content) {
         payload.content = prefix + payload.content;
@@ -33,7 +33,18 @@ async function sendCleanReply(message, content, options = {}) {
     }
     // Fallback for other types
     else {
-      payload = prefix + String(content);
+      payload = { content: prefix + String(content), ...options };
+    }
+
+    // Normalize components to an array of action rows
+    let rows = [];
+    if (payload.components) {
+      if (Array.isArray(payload.components)) {
+        rows = payload.components;
+      } else if (typeof payload.components === 'object') {
+        rows = [payload.components]; // Wrap single action row
+      }
+      payload.components = rows;
     }
 
     return await message.channel.send(payload);

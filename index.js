@@ -304,16 +304,17 @@ async function handleNaturalLanguage(message) {
     }
 
     // --- POST-MEAL CHECK (Convo Polish Phase) ---
-    const pendingCheck = contextMemory.getPendingContext(userId);
-    if (pendingCheck && (pendingCheck.type === 'post_meal_check' || pendingCheck.type === 'post_meal_check_wait_severity')) {
-        // If the context has expired, treat as a normal message
-        if (pendingCheck.expiresAt && pendingCheck.expiresAt < Date.now()) {
+    const pending = contextMemory; // Using contextMemory as pending store
+    const p = pending.getPendingContext(userId);
+    if (p && p.type?.startsWith("post_meal_check")) {
+        // If the context has expired, clear it.
+        if (p.expiresAt && p.expiresAt < Date.now()) {
             console.log(`[POST_MEAL_CHECK] Pending context expired for user ${userId}. Clearing and proceeding with normal NLU.`);
-            contextMemory.clearPendingContext(userId);
+            pending.clearPendingContext(userId);
         } else {
             console.log(`[POST_MEAL_CHECK] Handling message for pending post-meal check for user ${userId}.`);
-            await handlePostMealCheck(message, pendingCheck);
-            return;
+            await handlePostMealCheck(message, p);
+            return; // do not fall through to NLU
         }
     }
 
@@ -487,6 +488,7 @@ async function handleNaturalLanguage(message) {
 async function postLogActions(message, parseResult, undoId, caloriesVal, rowObj) {
     const { intent, slots } = parseResult;
     const userId = message.author.id;
+    const userTag = message.author.tag;
     const isPeyton = (userId === PEYTON_ID);
 
     // 1. Send Success Message
@@ -525,25 +527,29 @@ async function postLogActions(message, parseResult, undoId, caloriesVal, rowObj)
 
     // 2. Ask Follow-up Question
     if (intent === 'food' || intent === 'drink') {
-        try {
-            await message.channel.send("How are you feeling after that?");
-            // Extract sheetName and rowIndex from undoId
-            const [sheetName, rowIndexStr] = undoId.split(':');
-            const rowId = parseInt(rowIndexStr, 10);
+        // After successful appendRow(...), build a durable reference and persist it in the pending record.
+        const mealRef = {
+            tab: getSheetName(userId, userTag),                // e.g. "Peyton"
+            rowId: undoId ? parseInt(undoId.split(':')[1], 10) : null, // if your Sheets adapter returns one
+            timestampISO: rowObj.Timestamp,     // ALWAYS include this
+            item: rowObj.Item                   // helpful fallback match
+        };
 
-            const mealRef = {
-                tab: sheetName,
-                rowId: result?.rowId || null, // if your Sheets adapter returns one
-                timestampISO: rowObj.Timestamp,     // always include
-                item: rowObj.Item,                  // helpful for fallback lookup
-            };
-            
-            // Set a pending context for post-meal check
-            contextMemory.setPendingContext(userId, 'post_meal_check', {
-                mealRef: mealRef // Link to the logged meal
-            }, 120); // 2 minute TTL for follow-up
+        // set pending first; fail-soft if DM send fails
+        contextMemory.setPendingContext(userId, 'post_meal_check', {
+            mealRef: mealRef,
+            createdAt: Date.now(),
+            expiresAt: Date.now() + 2 * 60 * 1000
+        });
+
+        try {
+            await message.reply({
+                content: "How are you feeling after that?",
+                components: [buildSeverityButtons()],
+            });
         } catch (e) {
-            console.warn('[postLogActions] Error sending follow-up question:', e.message);
+            console.warn("[postLogActions] Error sending follow-up:", e);
+            contextMemory.clearPendingContext(userId); // don't leave a dangling pending
         }
     }
 
@@ -1150,42 +1156,29 @@ async function handlePostMealCheck(message, pendingCheck) {
   const text = message.content.trim();
   const userId = message.author.id;
 
-  const positive = /\b(solid|all good|pretty good|good|great|fine|ok|okay|no issues|felt fine|im fine)\b/i.test(text);
-  const neg = text.match(/\b(reflux|heartburn|nausea|bloat(?:ed|ing)?|gas(?:sy)?|cramp(?:s|ing)?|pain|burning|regurgitation|ugh|bad)\b/i);
+  const positive = /\b(solid|all good|pretty good|good|great|fine|ok|okay|no issues|felt fine)\b/i.test(text);
+  const neg = text.match(/\b(reflux|heartburn|nausea|bloat(?:ed|ing)?|gas(?:sy)?|cramp(?:s|ing)?|pain|burning|regurgitation)\b/i);
   const sevWord = (text.match(/\b(mild|moderate|severe)\b/i) || [])[1];
   const sevNum = (text.match(/\b([1-9]|10)\b/) || [])[1];
 
-  // POSITIVE → never create a symptom row
   if (positive && !neg) {
-    if (mealRef) {
-      try {
-        await updateMealNotes(googleSheets, mealRef, ['after_effect=ok']);
-      } catch (e) {
-        console.warn('[POST_MEAL_CHECK] notes append failed:', e);
-      }
-    } else {
-      console.warn('[POST_MEAL_CHECK] Missing mealRef; skipping note update.');
-    }
-    await message.reply('Got it — no symptoms. ✅');
-    contextMemory.clearPendingContext(userId);
+    try { if (mealRef) await updateMealNotes(googleSheets, mealRef, ["after_effect=ok"]); }
+    catch (e) { console.warn("[POST_MEAL_CHECK] notes append failed:", e); }
+    await message.reply({ content: "Got it — no symptoms. ✅" });
+    contextMemory.clearPendingContext(userId); // Use contextMemory directly
     return;
   }
 
-  // NEGATIVE with severity → log symptom linked to meal
   if (neg && (sevNum || sevWord)) {
     const severity = sevNum ? Number(sevNum) : ({ mild:3, moderate:6, severe:9 }[sevWord.toLowerCase()] || 5);
-    await logSymptomForMeal(userId, neg[1].toLowerCase(), severity, mealRef ? `${mealRef.tab}:${mealRef.rowId}` : null);
-    await message.reply(`Logged ${neg[1]} (severity ${severity}).`);
+    await logSymptomForMeal(userId, neg[1].toLowerCase(), severity, mealRef ? `${mealRef.tab}:${mealRef.rowId}` : null); // Pass mealRef string
+    await message.reply({ content: `Logged ${neg[1]} (severity ${severity}).` });
     contextMemory.clearPendingContext(userId);
     return;
   }
 
-  // UNCLEAR → one targeted question
-  await message.reply({
-      content: `${EMOJI.thinking} Any symptoms to log?`,
-      components: buttonsSeverity(false, true)
-  });
-  contextMemory.setPendingContext(userId, 'post_meal_check_wait_severity', pendingCheck, 120);
+  await message.reply({ content: "Any symptoms to log?", components: [buildSeverityButtons()] });
+  contextMemory.setPendingContext(userId, 'post_meal_check_wait_severity', { ...pendingCheck, createdAt: Date.now() }, 120);
 }
 
 /**
@@ -1467,6 +1460,18 @@ function setupReminders() {
     });
 
     console.log(`✅ Reminders scheduled for ${morningTime} and ${eveningTime}`);
+}
+
+function buildSeverityButtons() {
+  return {
+    type: 1, // Action Row
+    components: [
+      { type: 2, style: 2, custom_id: "pmc.none",     label: "None"     },
+      { type: 2, style: 1, custom_id: "pmc.mild",     label: "Mild"     },
+      { type: 2, style: 1, custom_id: "pmc.moderate", label: "Moderate" },
+      { type: 2, style: 4, custom_id: "pmc.severe",   label: "Severe"   },
+    ],
+  };
 }
 
 // Error handling
