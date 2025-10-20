@@ -33,7 +33,7 @@ const { handleChartsMenu, handleChartButton } = require('./src/commands/chartsMe
 
 // UX System imports
 const { EMOJI, PHRASES, getRandomPhrase, BUTTON_IDS } = require('./src/constants/ux');
-const { buttonsSeverity, buttonsMealTime, buttonsBristol, buttonsSymptomType, trendChip } = require('./src/ui/components');
+const { buttonsSeverity, buttonsMealTime, buttonsBristol, buttonsSymptomType, trendChip, buttonsIntentClarification } = require('./src/ui/components');
 const { buildPostLogChips } = require('./src/ui/chips');
 const contextMemory = require('./src/utils/contextMemory');
 const digests = require('./src/scheduler/digests');
@@ -41,6 +41,7 @@ const buttonHandlers = require('./src/handlers/buttonHandlers');
 const uxButtons = require('./src/handlers/uxButtons');
 const { isDuplicate } = require('./src/utils/dedupe');
 const { validateQuality } = require('./src/utils/qualityCheck');
+const { generateQuery, synthesizeAnswer } = require('./src/insights/AIAnalyst');
 
 // Calorie estimation
 const { estimateCaloriesForItemAndSides } = require('./src/nutrition/estimateCalories');
@@ -154,15 +155,7 @@ const commands = {
     '!palette': handleHelpPalette,     // Alias
     '!commands': handleHelpPalette,    // Alias
     '!howto': handleHowto,
-    '!today': handleToday,
-    '!week': handleWeek,
-    '!streak': handleStreak,
-    '!patterns': handlePatterns,
     '!undo': handleUndo,
-    '!insights': handleInsights,
-    '!triggers': handleTriggers,
-    '!trends': handleTrends,
-    '!weekly': handleWeeklySummary,
     '!goal': handleGoal,
     '!reminders': handleReminders,
     '!dnd': handleDND,
@@ -292,6 +285,19 @@ async function handleNaturalLanguage(message) {
     const userId = message.author.id;
     const userTag = message.author.tag;
 
+    // ========== CONTEXTUAL FOLLOW-UP ==========
+    const pendingContext = contextMemory.getPendingContext(userId);
+    if (pendingContext && pendingContext.type === 'expecting_symptom_follow_up') {
+        // Assume this message is the follow-up symptom
+        const result = await understand(text, { userId, tz: TIMEZONE, forcedIntent: 'symptom' });
+        if (result.intent === 'symptom' || result.intent === 'reflux') {
+            result.slots.linked_item = pendingContext.data.linkedItem;
+            console.log(`[Context] Follow-up symptom detected, linking to: ${pendingContext.data.linkedItem}`);
+            await logFromNLU(message, result);
+            return; // End processing for this follow-up
+        }
+    }
+
     // ========== DEDUPLICATION ==========
     // Ignore duplicate messages from same user within 2-second window
     if (isDuplicate(userId, text, message.createdTimestamp)) {
@@ -327,7 +333,12 @@ async function handleNaturalLanguage(message) {
         const userPrefs = await getUserPrefs(userId, googleSheets);
         const tz = userPrefs.TZ || TIMEZONE;
 
-        const result = await understand(text, { userId, tz }, contextMemory);
+        const understandOptions = { userId, tz };
+        if (message.forcedIntent) {
+            understandOptions.forcedIntent = message.forcedIntent;
+        }
+
+        const result = await understand(text, understandOptions, contextMemory);
 
         // Postprocess for token normalization
         postprocess(result);
@@ -372,23 +383,25 @@ async function handleNaturalLanguage(message) {
             return;
         }
 
-        // Confidence threshold: Don't auto-log if confidence < 80%
-        if (LOGGABLE_INTENTS.includes(result.intent) && result.confidence < 0.8) {
-            await message.reply({
-                content: `${EMOJI.thinking} I'm not quite sure what you mean. Try:\n` +
-                        `• "had oats for lunch"\n• "mild heartburn"\n• "bad poop"\n` +
-                        `Or use commands like \`!food\`, \`!symptom\`, etc.`
-            });
+        // Confidence threshold: Don't auto-log if confidence is too low
+        if ((LOGGABLE_INTENTS.includes(result.intent) && result.confidence < 0.65) || result.intent === 'other') {
+            await requestIntentClarification(message);
             return;
         }
 
         // If intent is not loggable and not conversational, ask for clarification
         if (!LOGGABLE_INTENTS.includes(result.intent)) {
-            await message.reply({
-                content: `${EMOJI.thinking} I'm not quite sure what you mean. Try:\n` +
-                        `• "had oats for lunch"\n• "mild heartburn"\n• "bad poop"\n` +
-                        `Or use commands like \`!food\`, \`!symptom\`, etc.`
-            });
+            // It's not a loggable intent, and not a known conversational one.
+            // Let's check if it's a question before giving up.
+            if (result.intent !== 'question') {
+                await requestIntentClarification(message);
+                return;
+            }
+        }
+
+        // Handle the question intent
+        if (result.intent === 'question') {
+            await handleQuestion(message, result.slots.query);
             return;
         }
 
@@ -426,6 +439,55 @@ async function handleNaturalLanguage(message) {
         }
     }
     // NEVER throw from this function - always handle errors internally
+}
+
+/**
+ * Handles a user's question about their data.
+ * @param {Message} message The Discord message object.
+ * @param {string} query The user's natural language question.
+ */
+async function handleQuestion(message, query) {
+    await message.channel.sendTyping();
+
+    // 1. Generate a structured query from the natural language question.
+    const structuredQuery = await generateQuery(query);
+
+    if (structuredQuery.error) {
+        await message.reply(`${EMOJI.error} ${structuredQuery.error}`);
+        return;
+    }
+
+    // 2. Execute the query against the user's Google Sheet.
+    const userId = message.author.id;
+    const sheetName = googleSheets.getLogSheetNameForUser(userId);
+    const queryResult = await googleSheets.executeQuery(sheetName, structuredQuery);
+
+    if (!queryResult.success) {
+        await message.reply(`${EMOJI.error} I had trouble fetching your data. Please try again.`);
+        return;
+    }
+
+    // 3. Synthesize a natural language answer from the results.
+    const finalAnswer = await synthesizeAnswer(query, queryResult);
+
+    await message.reply(finalAnswer);
+}
+
+/**
+ * Asks the user to clarify their intent when NLU is unsure.
+ */
+async function requestIntentClarification(message) {
+    // Store the original message content for later processing
+    buttonHandlers.pendingClarifications.set(message.author.id, {
+        type: 'intent_clarification',
+        originalMessage: message.content,
+        timestamp: Date.now()
+    });
+
+    await message.reply({
+        content: `${EMOJI.thinking} How should I log that?`,
+        components: buttonsIntentClarification()
+    });
 }
 
 /**
@@ -515,6 +577,11 @@ async function logFromNLU(message, parseResult) {
     // Add severity note if auto-detected
     if (slots.severity_note) notes.push(slots.severity_note);
     if (slots.bristol_note) notes.push(slots.bristol_note);
+
+    // Add linked item from conversational context
+    if (slots.linked_item) {
+        notesString += `; linked_to=${slots.linked_item}`;
+    }
 
     // Estimate calories for Peyton only (with portion multiplier)
     let caloriesVal = null;
@@ -622,7 +689,7 @@ async function logFromNLU(message, parseResult) {
             content: confirmText,
             components: chips
         });
-        console.log('[UI] ✅ Success message sent with chips');
+        console.log(`[UI] ✅ Success message sent with chips`);
     } catch (chipError) {
         console.warn('[UI] Chips failed, sending plain success:', chipError.message);
         try {
@@ -631,6 +698,18 @@ async function logFromNLU(message, parseResult) {
         } catch (plainError) {
             console.error('[UI] Failed to send any success message:', plainError);
             // Continue - save succeeded even if we can't message user
+        }
+    }
+
+    // After logging food/drink, ask a follow-up question and set context
+    if (intent === 'food' || intent === 'drink') {
+        try {
+            await message.channel.send("How are you feeling after that?");
+            contextMemory.setPendingContext(userId, 'expecting_symptom_follow_up', {
+                linkedItem: rowObj.Details
+            }, 600); // 10 minute TTL for follow-up
+        } catch (e) {
+            console.warn('[POSTSAVE][warn] followup question:', e.message);
         }
     }
 
@@ -679,6 +758,19 @@ async function logFromNLU(message, parseResult) {
             checkRoughPatch(message, userId).catch(e => console.warn('[POSTSAVE][warn] patch:', e.message));
             surfaceTrendChip(message, userTag, userId).catch(e => console.warn('[POSTSAVE][warn] trend:', e.message));
             scheduleSymptomFollowup(userId).catch(e => console.warn('[POSTSAVE][warn] followup:', e.message));
+        }
+
+        // Handle multi-actions from LLM
+        if (parseResult.multi_actions && parseResult.multi_actions.length > 0) {
+            console.log(`[Multi-Action] Processing ${parseResult.multi_actions.length} additional actions...`);
+            for (const action of parseResult.multi_actions) {
+                // To prevent infinite loops, don't re-process multi-actions within a multi-action
+                delete action.multi_actions;
+                // Log each subsequent action with a small delay
+                setTimeout(() => {
+                    logFromNLU(message, action).catch(e => console.error('[Multi-Action] Error logging sub-action:', e));
+                }, 500);
+            }
         }
 
         console.log('[SAVE] ✅ Post-save background tasks dispatched');
@@ -927,6 +1019,8 @@ client.on('messageCreate', async (message) => {
         const content = (message.content || '').trim();
         const hasPrefix = content.startsWith('!');
         const isSlash = !!message.interaction;
+
+        // Any message that is not a command is a potential NLU input
         const isCommand = hasPrefix || isSlash;
 
         // Permission check: Only process DMs or allowed channel messages
@@ -935,12 +1029,12 @@ client.on('messageCreate', async (message) => {
         }
 
         // Log routing decision
-        const route = isDM && !isCommand ? 'NLU' : (isCommand ? 'COMMAND' : 'IGNORE');
+        const route = isCommand ? 'COMMAND' : 'NLU';
         console.log(`\n[ROUTER] 📨 From: ${message.author.username} | isDM=${isDM} | hasPrefix=${hasPrefix} | Route: ${route}`);
         console.log(`[ROUTER] 📝 Content: "${content}"`);
 
-        // ========== ROUTE 1: DM + No Prefix = NLU ==========
-        if (isDM && !isCommand) {
+        // ========== ROUTE 1: Not a command = NLU ==========
+        if (!isCommand) {
             console.log('[ROUTER] ✅ Routing to NLU handler');
             try {
                 await handleNaturalLanguage(message);
@@ -980,11 +1074,12 @@ client.on('messageCreate', async (message) => {
         }
 
         // ========== ROUTE 3: Channel + No Prefix = Try NLU if allowed ==========
-        if (isAllowedChannel && !isCommand) {
-            console.log('[ROUTER] ✅ Routing channel message to NLU handler');
-            await handleNaturalLanguage(message);
-            return;
-        }
+        // This route is now covered by the main NLU route.
+        // if (isAllowedChannel && !isCommand) {
+        //     console.log('[ROUTER] ✅ Routing channel message to NLU handler');
+        //     await handleNaturalLanguage(message);
+        //     return;
+        // }
 
         // ========== ROUTE 4: Everything else = Ignore ==========
         console.log('[ROUTER] ⚠️ Message ignored (no matching route)');
@@ -1341,610 +1436,6 @@ async function handleHowto(message) {
     await message.reply({ embeds: [embed] });
 }
 
-async function handleToday(message) {
-    const userId = message.author.id;
-    const userName = getUserName(message.author.username);
-    const sheetName = googleSheets.getLogSheetNameForUser(userId);
-    const isPeyton = (userId === PEYTON_ID);
-
-    try {
-        // Fetch today's entries
-        const result = await googleSheets.getRows({}, sheetName);
-        if (!result.success) {
-            return message.reply('❌ Failed to fetch today\'s data.');
-        }
-
-        const today = moment().tz(TIMEZONE).format('YYYY-MM-DD');
-        const todayEntries = result.rows.filter(row => {
-            return row.Date === today && !row.Notes?.includes('deleted=true');
-        });
-
-        if (todayEntries.length === 0) {
-            return message.reply('No entries found for today. Start tracking with `!food`, `!symptom`, or other commands!');
-        }
-
-        // Calculate intake (food + drink calories)
-        let totalIntake = 0;
-        todayEntries.forEach(row => {
-            if ((row.Type === 'food' || row.Type === 'drink') && row.Calories) {
-                const cal = parseInt(row.Calories, 10);
-                if (!isNaN(cal)) totalIntake += cal;
-            }
-        });
-
-        // Calculate reflux stats
-        const refluxEntries = todayEntries.filter(row => row.Type === 'reflux');
-        const refluxCount = refluxEntries.length;
-        let avgRefluxSeverity = 0;
-        if (refluxCount > 0) {
-            const severities = refluxEntries.map(row => {
-                const sev = row.Severity || row.Notes?.match(/severity=(\d+)/)?.[1];
-                return sev ? parseInt(sev, 10) : 5;
-            }).filter(s => !isNaN(s));
-            avgRefluxSeverity = severities.length > 0
-                ? (severities.reduce((a, b) => a + b, 0) / severities.length).toFixed(1)
-                : 0;
-        }
-
-        // Fetch Health_Peyton data for net calories (Peyton only)
-        let netCalories = null;
-        let burnCalories = null;
-        if (isPeyton) {
-            try {
-                const healthResult = await googleSheets.getRows({}, 'Health_Peyton');
-                if (healthResult.success) {
-                    const todayHealth = healthResult.rows.find(row => row.Date === today);
-                    if (todayHealth && todayHealth.Total_kcal) {
-                        burnCalories = parseInt(todayHealth.Total_kcal, 10);
-                        if (!isNaN(burnCalories)) {
-                            netCalories = totalIntake - burnCalories;
-                        }
-                    }
-                }
-            } catch (err) {
-                console.log('[TODAY] Health_Peyton not available:', err.message);
-            }
-        }
-
-        // Calculate 7-day reflux trend
-        const sevenDaysAgo = moment().tz(TIMEZONE).subtract(7, 'days').format('YYYY-MM-DD');
-        const last7Days = result.rows.filter(row => {
-            return row.Date >= sevenDaysAgo && row.Date < today && !row.Notes?.includes('deleted=true');
-        });
-
-        const refluxLast7 = last7Days.filter(row => row.Type === 'reflux').length;
-        const avgLast7 = refluxLast7 / 7;
-        const avgToday = refluxCount; // Today's count
-
-        let trendText = '—';
-        let trendColor = 0x808080; // Gray
-        if (avgLast7 > 0) {
-            const change = ((avgToday - avgLast7) / avgLast7) * 100;
-            if (change <= -15) {
-                trendText = '📉 Improving';
-                trendColor = 0x00FF00; // Green
-            } else if (change >= 15) {
-                trendText = '📈 Worsening';
-                trendColor = 0xFF0000; // Red
-            } else {
-                trendText = '➡️ Stable';
-                trendColor = 0xFFA500; // Orange
-            }
-        }
-
-        // Build compact embed
-        const embed = new EmbedBuilder()
-            .setColor(trendColor)
-            .setTitle(`📊 Today's Summary`)
-            .setDescription(`${moment().tz(TIMEZONE).format('dddd, MMM DD')}`)
-            .setTimestamp();
-
-        // Line 1: Intake
-        let fields = [];
-        if (isPeyton && totalIntake > 0) {
-            fields.push({
-                name: '🍽 Intake',
-                value: `${totalIntake} kcal`,
-                inline: true
-            });
-        }
-
-        // Line 2: Reflux
-        if (refluxCount > 0) {
-            fields.push({
-                name: '🔥 Reflux',
-                value: `${refluxCount} event${refluxCount > 1 ? 's' : ''} • avg ${avgRefluxSeverity}`,
-                inline: true
-            });
-        } else {
-            fields.push({
-                name: '🔥 Reflux',
-                value: 'None today',
-                inline: true
-            });
-        }
-
-        // Line 3: Net (if available)
-        if (netCalories !== null) {
-            const sign = netCalories >= 0 ? '+' : '';
-            fields.push({
-                name: '⚖️ Net',
-                value: `${totalIntake} - ${burnCalories} = ${sign}${netCalories}`,
-                inline: false
-            });
-        }
-
-        // Line 4: Trend
-        fields.push({
-            name: '📈 7-Day Trend',
-            value: trendText,
-            inline: true
-        });
-
-        embed.addFields(...fields);
-
-        await message.reply({ embeds: [embed] });
-    } catch (error) {
-        console.error('[TODAY] Error:', error);
-        await message.reply('❌ Failed to generate today\'s summary.');
-    }
-}
-
-async function handleWeek(message) {
-    const userId = message.author.id;
-    const userName = getUserName(message.author.username);
-    const sheetName = googleSheets.getLogSheetNameForUser(userId);
-
-    const weekData = await googleSheets.getWeekEntries(userName, sheetName);
-
-    if (!weekData || weekData.length === 0) {
-        return message.reply('No entries found for this week. Start tracking to see your patterns!');
-    }
-
-    // Calculate summary stats
-    const totalEntries = weekData.length;
-    const symptomDays = new Set(weekData.filter(e => e.type === 'symptom' || e.type === 'reflux').map(e => e.date)).size;
-    const avgDailyEntries = (totalEntries / 7).toFixed(1);
-
-    // Top foods
-    const foods = weekData.filter(e => e.type === 'food').map(e => e.details || e.value);
-    const foodCounts = {};
-    foods.forEach(f => foodCounts[f] = (foodCounts[f] || 0) + 1);
-    const topFoods = Object.entries(foodCounts)
-        .sort((a, b) => b[1] - a[1])
-        .slice(0, 3)
-        .map(([food]) => food);
-
-    // Common symptoms
-    const symptoms = weekData.filter(e => e.type === 'symptom' || e.type === 'reflux').map(e => e.details || e.value);
-    const symptomCounts = {};
-    symptoms.forEach(s => symptomCounts[s] = (symptomCounts[s] || 0) + 1);
-    const commonSymptoms = Object.entries(symptomCounts)
-        .sort((a, b) => b[1] - a[1])
-        .slice(0, 3)
-        .map(([symptom]) => symptom);
-
-    const embed = new EmbedBuilder()
-        .setColor(0x9932CC)
-        .setTitle(`📈 Weekly Summary for ${userName}`)
-        .setDescription(`Week of ${moment().tz(TIMEZONE).startOf('week').format('MMM DD')} - ${moment().tz(TIMEZONE).endOf('week').format('MMM DD, YYYY')}`)
-        .addFields(
-            { name: 'Total Entries', value: `${totalEntries}`, inline: true },
-            { name: 'Symptom Days', value: `${symptomDays}/7`, inline: true },
-            { name: 'Average Daily Entries', value: `${avgDailyEntries}`, inline: true },
-            { name: 'Top Foods', value: topFoods.join(', ') || 'None tracked', inline: false },
-            { name: 'Common Symptoms', value: commonSymptoms.join(', ') || 'None tracked', inline: false }
-        )
-        .setTimestamp();
-
-    await message.reply({ embeds: [embed] });
-}
-
-async function handleStreak(message) {
-    const userName = getUserName(message.author.username);
-    const streakData = await analyzer.getStreakData(userName);
-
-    const embed = new EmbedBuilder()
-        .setColor(0xFFD700)
-        .setTitle(`🔥 Streak Data for ${userName}`)
-        .addFields(
-            { name: 'Current Tracking Streak', value: `${streakData.trackingStreak} days`, inline: true },
-            { name: 'Days Without Trigger Foods', value: `${streakData.triggerFreeStreak} days`, inline: true },
-            { name: 'Best Streak', value: `${streakData.bestStreak} days`, inline: true }
-        )
-        .setTimestamp();
-
-    if (streakData.trackingStreak >= 7) {
-        embed.setDescription('🌟 Amazing! You\'ve been tracking for a week or more!');
-    } else if (streakData.trackingStreak >= 3) {
-        embed.setDescription('💪 Great job! Keep the streak going!');
-    } else {
-        embed.setDescription('📝 Keep tracking daily to build your streak!');
-    }
-
-    await message.reply({ embeds: [embed] });
-}
-
-async function handlePatterns(message) {
-    const userId = message.author.id;
-    const userName = getUserName(message.author.username);
-    const sheetName = googleSheets.getLogSheetNameForUser(userId);
-
-    const entries = await googleSheets.getAllEntries(userName, sheetName);
-
-    if (!entries || entries.length < 7) {
-        return message.reply('Need more data to analyze patterns. Keep tracking for at least a week!');
-    }
-
-    const patterns = await analyzer.analyzePatterns(userName);
-
-    const embed = new EmbedBuilder()
-        .setColor(0x4169E1)
-        .setTitle(`🔍 Pattern Analysis for ${userName}`)
-        .setDescription('Based on your recent tracking data:')
-        .addFields(
-            { name: '🍔 Most Common Foods', value: patterns.topFoods.map(f => `• ${f.food} (${f.count}x)`).join('\n') || 'None', inline: false },
-            { name: '🩺 Symptom Correlations', value: patterns.correlations.join('\n') || 'No clear patterns yet', inline: false },
-            { name: '⏰ Peak Symptom Times', value: patterns.peakTimes.join(', ') || 'No pattern detected', inline: false },
-            { name: '💡 Recommendations', value: patterns.recommendations.join('\n') || 'Keep tracking for personalized insights', inline: false }
-        )
-        .setTimestamp();
-
-    await message.reply({ embeds: [embed] });
-}
-
-// Helper functions
-function getUserName(discordUsername) {
-    // Simply return the actual Discord username for proper tracking
-    // This ensures each user's entries are tracked separately
-    return discordUsername;
-}
-
-// Handle NLP results
-async function handleNLPResult(message, nlpResult) {
-    const userName = getUserName(message.author.username);
-    const timestamp = moment().tz(TIMEZONE).format('YYYY-MM-DD HH:mm:ss');
-    const source = !message.guild ? 'DM' : 'Channel';
-
-    // Handle severity prompts
-    if (nlpResult.needsSeverity) {
-        await message.reply(nlpResult.response);
-        return;
-    }
-
-    // Log to Google Sheets based on type
-    try {
-        const entry = {
-            timestamp,
-            user: userName,
-            type: nlpResult.type,
-            value: nlpResult.value,
-            severity: nlpResult.severity || '',
-            category: nlpResult.category,
-            notes: '',
-            source: source
-        };
-
-        await googleSheets.appendRow(entry);
-
-        // Add appropriate reaction
-        if (nlpResult.isTrigger) {
-            await message.react('⚠️');
-        } else if (nlpResult.type === 'positive') {
-            await message.react('🌟');
-        } else if (nlpResult.type === 'symptom') {
-            await message.react('💙');
-        } else {
-            await message.react('✅');
-        }
-
-        // Send response
-        await message.reply(nlpResult.response);
-
-        // Additional smart responses based on patterns
-        if (nlpResult.isTrigger) {
-            // Check recent symptoms for this user
-            const recentEntries = await googleSheets.getTodayEntries(userName);
-            const hasSymptoms = recentEntries.some(e => e.type === 'symptom' || e.type === 'reflux');
-
-            if (hasSymptoms) {
-                await message.reply('⚠️ I notice you\'ve had symptoms today. This trigger might be related - consider avoiding it for a few days.');
-            }
-        }
-
-        // Check for positive streaks
-        if (nlpResult.type === 'positive') {
-            const todayEntries = await googleSheets.getTodayEntries(userName);
-            const positiveCount = todayEntries.filter(e => e.category === 'Improvement').length;
-
-            if (positiveCount >= 3) {
-                await message.reply('🎉 You\'re having a great day! Keep doing what you\'re doing!');
-            }
-        }
-
-    } catch (error) {
-        console.error('Error processing NLP result:', error);
-        await message.reply('❌ Failed to log your entry. Please try using a command instead.');
-    }
-}
-
-// Handle undo command
-async function handleUndo(message) {
-    const userId = message.author.id;
-    const userName = getUserName(message.author.username);
-    const sheetName = googleSheets.getLogSheetNameForUser(userId);
-
-    try {
-        const result = await googleSheets.undoLastEntry(userName, sheetName);
-
-        if (result.success) {
-            await message.react('↩️');
-            await message.reply(`✅ ${result.message}`);
-        } else {
-            await message.reply(`❌ ${result.message}`);
-        }
-    } catch (error) {
-        console.error('Error undoing entry:', error);
-        await message.reply('❌ Failed to undo last entry. Please try again.');
-    }
-}
-
-// Handle clarified messages
-async function handleClarifiedMessage(message, clarificationResult) {
-    const userName = getUserName(message.author.username);
-    const timestamp = moment().tz(TIMEZONE).format('YYYY-MM-DD HH:mm:ss');
-    const source = !message.guild ? 'DM' : 'Channel';
-
-    try {
-        let entry = {};
-
-        switch (clarificationResult.type) {
-            case 'symptom_type':
-                const parsed = clarificationResult.parsedType;
-                entry = {
-                    timestamp,
-                    user: userName,
-                    type: parsed.type,
-                    value: parsed.value,
-                    severity: 'moderate',
-                    category: parsed.category,
-                    notes: clarificationResult.originalMessage,
-                    source
-                };
-                await googleSheets.appendRow(entry);
-                await message.reply(`✅ Logged ${parsed.value} symptom. Take care! 💙`);
-                break;
-
-            case 'meal_context':
-                const mealContext = clarificationResult.parsedContext;
-                entry = {
-                    timestamp,
-                    user: userName,
-                    type: 'food',
-                    value: `${clarificationResult.originalMessage} (${mealContext.context})`,
-                    severity: null,
-                    category: 'Neutral',
-                    notes: `${mealContext.time} meal`,
-                    source
-                };
-                await googleSheets.appendRow(entry);
-                await message.reply(`✅ Logged for ${mealContext.context}! 📝`);
-                break;
-
-            case 'bm_detail':
-                const bmDetail = clarificationResult.parsedDetail;
-                entry = {
-                    timestamp,
-                    user: userName,
-                    type: 'bm',
-                    value: bmDetail.description,
-                    severity: null,
-                    category: 'Bowel Movement',
-                    notes: `Bristol scale: ${bmDetail.bristol}`,
-                    source
-                };
-                await googleSheets.appendRow(entry);
-                await message.reply(`✅ Logged bowel movement: ${bmDetail.description} 📝`);
-                break;
-
-            case 'improvement_type':
-                const improvement = clarificationResult.parsedImprovement;
-                entry = {
-                    timestamp,
-                    user: userName,
-                    type: improvement.type,
-                    value: improvement.symptom || improvement.description,
-                    severity: null,
-                    category: 'Improvement',
-                    notes: clarificationResult.originalMessage,
-                    source
-                };
-                await googleSheets.appendRow(entry);
-                await message.reply(`✅ Great to hear you're feeling better! 🌟`);
-                break;
-        }
-
-        await message.react('✅');
-    } catch (error) {
-        console.error('Error processing clarified message:', error);
-        await message.reply('❌ Failed to log entry. Please try again.');
-    }
-}
-
-// Handle insights command - show pattern insights
-async function handleInsights(message) {
-    // Phase 3: Use new insights module
-    const { handleInsights: insightsCommand } = require('./src/commands/insights');
-
-    await insightsCommand(message, {
-        googleSheets,
-        getUserName,
-        getLogSheetNameForUser: googleSheets.getLogSheetNameForUser,
-        PEYTON_ID
-    });
-}
-
-// Handle triggers command - show trigger correlations
-async function handleTriggers(message) {
-    const userId = message.author.id;
-    const userName = getUserName(message.author.username);
-    const sheetName = googleSheets.getLogSheetNameForUser(userId);
-
-    try {
-        const entries = await googleSheets.getAllEntries(userName, sheetName);
-
-        if (entries.length < 5) {
-            return message.reply('📊 You need more entries to detect trigger patterns. Keep tracking!');
-        }
-
-        const patterns = await PatternAnalyzer.findRepeatedPatterns(entries, userName);
-        const combinations = await PatternAnalyzer.findCombinationTriggers(entries, userName);
-
-        const embed = new EmbedBuilder()
-            .setColor(0xE74C3C)
-            .setTitle('⚠️ Trigger Analysis')
-            .setTimestamp();
-
-        if (patterns.length > 0) {
-            const triggerList = patterns.slice(0, 5).map((p, i) =>
-                `${i + 1}. **${p.trigger}** - Linked to symptoms ${p.count} times`
-            ).join('\n');
-
-            embed.addFields({
-                name: '🔍 Top Triggers',
-                value: triggerList || 'No clear triggers detected yet',
-                inline: false
-            });
-        }
-
-        if (combinations.length > 0) {
-            const comboList = combinations.slice(0, 3).map((c, i) =>
-                `${i + 1}. ${c.combination} (${c.count}x)`
-            ).join('\n');
-
-            embed.addFields({
-                name: '🔗 Combination Triggers',
-                value: comboList,
-                inline: false
-            });
-        }
-
-        if (patterns.length === 0 && combinations.length === 0) {
-            embed.setDescription('No strong trigger patterns detected yet. Keep tracking to identify patterns!');
-        }
-
-        await message.reply({ embeds: [embed] });
-    } catch (error) {
-        console.error('Error analyzing triggers:', error);
-        await message.reply('❌ Failed to analyze triggers. Please try again.');
-    }
-}
-
-// Handle trends command - show symptom trends
-async function handleTrends(message) {
-    const userId = message.author.id;
-    const userName = getUserName(message.author.username);
-    const sheetName = googleSheets.getLogSheetNameForUser(userId);
-
-    try {
-        const entries = await googleSheets.getAllEntries(userName, sheetName);
-
-        if (entries.length < 5) {
-            return message.reply('📊 You need more entries to calculate trends. Keep tracking!');
-        }
-
-        const trends = await PatternAnalyzer.calculateTrends(entries, userName, 7);
-        const timePattern = await PatternAnalyzer.findTimePatterns(entries, userName);
-
-        const embed = new EmbedBuilder()
-            .setColor(trends.trend === 'improving' ? 0x2ECC71 :
-                     trends.trend === 'worsening' ? 0xE74C3C : 0x95A5A6)
-            .setTitle('📈 Your Health Trends')
-            .setDescription(trends.message)
-            .addFields(
-                { name: 'Average Symptoms/Day', value: trends.avgPerDay, inline: true },
-                { name: 'Total This Week', value: trends.totalSymptoms.toString(), inline: true }
-            )
-            .setTimestamp();
-
-        if (timePattern.hasPattern) {
-            embed.addFields({
-                name: '⏰ Time Pattern',
-                value: timePattern.message,
-                inline: false
-            });
-        }
-
-        await message.reply({ embeds: [embed] });
-    } catch (error) {
-        console.error('Error calculating trends:', error);
-        await message.reply('❌ Failed to calculate trends. Please try again.');
-    }
-}
-
-// Handle weekly summary command
-async function handleWeeklySummary(message) {
-    const userId = message.author.id;
-    const userName = getUserName(message.author.username);
-    const sheetName = googleSheets.getLogSheetNameForUser(userId);
-
-    try {
-        const entries = await googleSheets.getAllEntries(userName, sheetName);
-
-        if (entries.length < 3) {
-            return message.reply('📊 You need more entries for a weekly summary. Keep tracking!');
-        }
-
-        const summary = await PatternAnalyzer.getWeeklySummary(entries, userName);
-
-        const embed = new EmbedBuilder()
-            .setColor(0x3498DB)
-            .setTitle(`📅 Weekly Summary (Week of ${summary.weekStart})`)
-            .addFields(
-                { name: '📊 Days Tracked', value: summary.daysTracked.toString(), inline: true },
-                { name: '✅ Symptom-Free Days', value: summary.symptomFreeDays.toString(), inline: true },
-                { name: '⚠️ Total Symptoms', value: summary.totalSymptoms.toString(), inline: true }
-            )
-            .setTimestamp();
-
-        if (summary.worstTriggers.length > 0) {
-            const triggerList = summary.worstTriggers
-                .map((t, i) => `${i + 1}. ${t.name} (${t.count}x)`)
-                .join('\n');
-
-            embed.addFields({
-                name: '🚫 Worst Triggers This Week',
-                value: triggerList,
-                inline: false
-            });
-        }
-
-        if (summary.topSafeFoods.length > 0) {
-            const safeList = summary.topSafeFoods
-                .map((f, i) => `${i + 1}. ${f.name} (${f.count}x)`)
-                .join('\n');
-
-            embed.addFields({
-                name: '✅ Top Safe Foods',
-                value: safeList,
-                inline: false
-            });
-        }
-
-        embed.addFields({
-            name: '📈 Trend',
-            value: summary.trends.message,
-            inline: false
-        });
-
-        await message.reply({ embeds: [embed] });
-    } catch (error) {
-        console.error('Error generating weekly summary:', error);
-        await message.reply('❌ Failed to generate weekly summary. Please try again.');
-    }
-}
-
-// Handle goal command - set daily calorie goal (Peyton only)
 async function handleGoal(message, args) {
     const userId = message.author.id;
 
@@ -1959,251 +1450,4 @@ async function handleGoal(message, args) {
         if (currentGoal) {
             return message.reply(`📊 Your current daily goal is **${currentGoal} kcal**.\n\nUse \`!goal <number>\` to change it.`);
         } else {
-            return message.reply(`📊 No daily goal set yet.\n\nUse \`!goal <number>\` to set one (e.g., \`!goal 2200\`).`);
-        }
-    }
-
-    // Parse the goal value
-    const val = parseInt(args.trim(), 10);
-
-    if (!Number.isFinite(val) || val < 1000 || val > 5000) {
-        return message.reply('Please provide a daily kcal goal between 1000 and 5000.');
-    }
-
-    // Set the goal
-    userGoals.set(userId, val);
-
-    return message.reply(`✅ Set your daily goal to **${val} kcal**.`);
-}
-
-// Handle reminders command - configure proactive reminders
-async function handleReminders(message, args) {
-    const userId = message.author.id;
-
-    if (!args || args.trim() === '') {
-        return message.reply(
-            '🔔 **Reminder Settings**\n\n' +
-            '**Usage:**\n' +
-            '• `!reminders on` - Enable reminders\n' +
-            '• `!reminders off` - Disable reminders\n' +
-            '• `!reminders time 08:00` - Set morning check-in\n' +
-            '• `!reminders evening 20:30` - Set evening recap\n' +
-            '• `!reminders inactivity 14:00` - Set inactivity nudge\n\n' +
-            '_Blank time to disable: `!reminders evening`_'
-        );
-    }
-
-    const [sub, val] = args.trim().split(/\s+/);
-
-    // Handle on/off
-    if (sub === 'on' || sub === 'off') {
-        await setUserPrefs(userId, { DM: sub }, googleSheets);
-        await updateUserSchedule(client, googleSheets, userId, {
-            getLogSheetNameForUser: googleSheets.getLogSheetNameForUser.bind(googleSheets),
-            getTodayEntries: googleSheets.getTodayEntries.bind(googleSheets),
-            setUserPrefs: (id, partial) => setUserPrefs(id, partial, googleSheets)
-        });
-        return message.reply(`🔔 Reminders ${sub === 'on' ? '**enabled**' : '**disabled**'}.`);
-    }
-
-    // Handle time settings
-    const keyMap = {
-        time: 'MorningHHMM',
-        morning: 'MorningHHMM',
-        evening: 'EveningHHMM',
-        inactivity: 'InactivityHHMM'
-    };
-
-    const key = keyMap[sub];
-    if (key) {
-        const timeValue = (val || '').trim();
-
-        // Validate time format if provided
-        if (timeValue && !/^\d{1,2}:\d{2}$/.test(timeValue)) {
-            return message.reply('⚠️ Invalid time format. Use HH:MM (e.g., `08:00` or `20:30`)');
-        }
-
-        await setUserPrefs(userId, { [key]: timeValue }, googleSheets);
-        await updateUserSchedule(client, googleSheets, userId, {
-            getLogSheetNameForUser: googleSheets.getLogSheetNameForUser.bind(googleSheets),
-            getTodayEntries: googleSheets.getTodayEntries.bind(googleSheets),
-            setUserPrefs: (id, partial) => setUserPrefs(id, partial, googleSheets)
-        });
-
-        const labelMap = {
-            time: '⏰ Morning check-in',
-            morning: '⏰ Morning check-in',
-            evening: '🌙 Evening recap',
-            inactivity: '📭 Inactivity nudge'
-        };
-
-        const label = labelMap[sub];
-        return message.reply(`${label} ${timeValue ? `set to **${timeValue}**` : '**disabled**'}.`);
-    }
-
-    return message.reply('⚠️ Unknown subcommand. Use `!reminders` for help.');
-}
-
-// Handle DND, Timezone, Snooze commands (Phase 4)
-async function handleDND(message, args) {
-    await dndCommands.handleDND(message, args, { getUserPrefs, setUserPrefs, googleSheets });
-}
-
-async function handleTimezone(message, args) {
-    await dndCommands.handleTimezone(message, args, { getUserPrefs, setUserPrefs, googleSheets });
-}
-
-async function handleSnooze(message, args) {
-    await dndCommands.handleSnooze(message, args, { getUserPrefs, setUserPrefs, googleSheets });
-}
-
-async function handleSnooze_OLD_LEGACY(message, args) {
-    const userId = message.author.id;
-    const tz = (args || '').trim();
-
-    if (!tz) {
-        const prefs = await getUserPrefs(userId, googleSheets);
-        const currentTz = prefs?.TZ || 'America/Los_Angeles';
-        return message.reply(
-            `🌐 **Timezone Settings**\n\n` +
-            `Current: **${currentTz}**\n\n` +
-            `**Usage:** \`!timezone America/Los_Angeles\`\n\n` +
-            `Common timezones:\n` +
-            `• America/New_York (EST/EDT)\n` +
-            `• America/Chicago (CST/CDT)\n` +
-            `• America/Denver (MST/MDT)\n` +
-            `• America/Los_Angeles (PST/PDT)\n` +
-            `• Europe/London\n` +
-            `• Asia/Tokyo`
-        );
-    }
-
-    // Validate timezone
-    if (!moment.tz.zone(tz)) {
-        return message.reply('⚠️ Unknown timezone. Use a valid IANA timezone (e.g., `America/New_York`).');
-    }
-
-    await setUserPrefs(userId, { TZ: tz }, googleSheets);
-    await updateUserSchedule(client, googleSheets, userId, {
-        getLogSheetNameForUser: googleSheets.getLogSheetNameForUser.bind(googleSheets),
-        getTodayEntries: googleSheets.getTodayEntries.bind(googleSheets),
-        setUserPrefs: (id, partial) => setUserPrefs(id, partial, googleSheets)
-    });
-
-    return message.reply(`🌐 Timezone set to **${tz}**.`);
-}
-
-// Handle snooze command - temporarily disable reminders
-async function handleSnooze(message, args) {
-    const userId = message.author.id;
-    const duration = (args || '').trim();
-
-    if (!duration) {
-        const prefs = await getUserPrefs(userId, googleSheets);
-        if (prefs?.SnoozeUntil) {
-            const until = moment.tz(prefs.SnoozeUntil, prefs.TZ || 'America/Los_Angeles');
-            return message.reply(
-                `💤 **Snooze Status**\n\n` +
-                `Reminders snoozed until: **${until.format('MMM DD, YYYY HH:mm')}**\n\n` +
-                `Use \`!snooze clear\` to re-enable reminders.`
-            );
-        } else {
-            return message.reply(
-                `💤 **Snooze Reminders**\n\n` +
-                `**Usage:**\n` +
-                `• \`!snooze 1h\` - Snooze for 1 hour\n` +
-                `• \`!snooze 3d\` - Snooze for 3 days\n` +
-                `• \`!snooze 1w\` - Snooze for 1 week\n` +
-                `• \`!snooze clear\` - Re-enable reminders`
-            );
-        }
-    }
-
-    if (duration === 'clear') {
-        await setUserPrefs(userId, { SnoozeUntil: '' }, googleSheets);
-        await updateUserSchedule(client, googleSheets, userId, {
-            getLogSheetNameForUser: googleSheets.getLogSheetNameForUser.bind(googleSheets),
-            getTodayEntries: googleSheets.getTodayEntries.bind(googleSheets),
-            setUserPrefs: (id, partial) => setUserPrefs(id, partial, googleSheets)
-        });
-        return message.reply('✅ Reminders re-enabled (snooze cleared).');
-    }
-
-    // Parse duration (e.g., "1h", "3d", "1w")
-    const match = duration.match(/^(\d+)([hdw])$/);
-    if (!match) {
-        return message.reply('⚠️ Invalid duration. Use format like `1h`, `3d`, or `1w`.');
-    }
-
-    const [, amount, unit] = match;
-    const prefs = await getUserPrefs(userId, googleSheets);
-    const tz = prefs?.TZ || 'America/Los_Angeles';
-    const now = moment().tz(tz);
-
-    let until;
-    switch (unit) {
-        case 'h':
-            until = now.clone().add(parseInt(amount), 'hours');
-            break;
-        case 'd':
-            until = now.clone().add(parseInt(amount), 'days');
-            break;
-        case 'w':
-            until = now.clone().add(parseInt(amount), 'weeks');
-            break;
-    }
-
-    await setUserPrefs(userId, { SnoozeUntil: until.toISOString() }, googleSheets);
-    await updateUserSchedule(client, googleSheets, userId, {
-        getLogSheetNameForUser: googleSheets.getLogSheetNameForUser.bind(googleSheets),
-        getTodayEntries: googleSheets.getTodayEntries.bind(googleSheets),
-        setUserPrefs: (id, partial) => setUserPrefs(id, partial, googleSheets)
-    });
-
-    return message.reply(`💤 Reminders snoozed until **${until.format('MMM DD, YYYY HH:mm')}**.`);
-}
-
-function setupReminders() {
-    const morningTime = process.env.MORNING_REMINDER_TIME || '09:00';
-    const eveningTime = process.env.EVENING_REMINDER_TIME || '20:00';
-
-    // Morning reminder
-    const [morningHour, morningMinute] = morningTime.split(':');
-    cron.schedule(`${morningMinute} ${morningHour} * * *`, async () => {
-        const channel = client.channels.cache.get(CHANNEL_ID);
-        if (channel) {
-            await channel.send('☀️ Good morning! Don\'t forget to log your breakfast and any morning symptoms. Use `!help` if you need command reminders!');
-        }
-    });
-
-    // Evening reminder
-    const [eveningHour, eveningMinute] = eveningTime.split(':');
-    cron.schedule(`${eveningMinute} ${eveningHour} * * *`, async () => {
-        const channel = client.channels.cache.get(CHANNEL_ID);
-        if (channel) {
-            await channel.send('🌙 Evening check-in! Remember to log your dinner and any symptoms from today. Use `!today` to see your daily summary!');
-        }
-    });
-
-    console.log(`✅ Reminders scheduled for ${morningTime} and ${eveningTime}`);
-}
-
-// Error handling
-process.on('unhandledRejection', error => {
-    console.error('Unhandled promise rejection:', error);
-});
-
-// Login to Discord
-console.log('🔑 Attempting to login to Discord...');
-console.log(`   Token length: ${DISCORD_TOKEN ? DISCORD_TOKEN.length : 'undefined'} characters`);
-console.log(`   Token starts with: ${DISCORD_TOKEN ? DISCORD_TOKEN.substring(0, 20) + '...' : 'undefined'}`);
-
-client.login(DISCORD_TOKEN)
-    .then(() => {
-        console.log('🔐 Successfully authenticated with Discord');
-    })
-    .catch(error => {
-        console.error('❌ Failed to login to Discord:', error);
-        console.log('Please check your DISCORD_TOKEN in the .env file');
-        process.exit(1);
-    });
+            return message.reply(`📊 No daily goal set yet.\n\nUse \`!goal <number>\`

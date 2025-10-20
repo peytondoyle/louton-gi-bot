@@ -31,6 +31,8 @@ async function handleButtonInteraction(interaction, googleSheets, digests) {
             await handleBristol(interaction, googleSheets);
         } else if (customId.startsWith('checkin_')) {
             await digests.handleCheckInResponse(interaction, googleSheets, contextMemory);
+        } else if (customId.startsWith('intent_')) {
+            await handleIntentClarification(interaction);
         } else if (customId === BUTTON_IDS.undo) {
             await handleUndo(interaction, googleSheets);
         } else if (customId === BUTTON_IDS.dismiss) {
@@ -50,6 +52,69 @@ async function handleButtonInteraction(interaction, googleSheets, digests) {
         } catch (e) {
             console.error('Failed to send error response:', e);
         }
+    }
+}
+
+/**
+ * Handles the user's choice from the intent clarification buttons.
+ * @param {Interaction} interaction - Discord button interaction
+ */
+async function handleIntentClarification(interaction) {
+    const userId = interaction.user.id;
+    const customId = interaction.customId;
+
+    const pending = pendingClarifications.get(userId);
+    if (!pending || pending.type !== 'intent_clarification') {
+        await interaction.update({
+            content: 'This action has expired. Please send your message again.',
+            components: []
+        });
+        return;
+    }
+
+    // Clear the pending clarification
+    pendingClarifications.delete(userId);
+
+    if (customId === BUTTON_IDS.intent.cancel) {
+        await interaction.update({
+            content: 'Ok, action cancelled.',
+            components: []
+        });
+        return;
+    }
+
+    let forcedIntent = null;
+    if (customId === BUTTON_IDS.intent.log_food) {
+        forcedIntent = 'food';
+    } else if (customId === BUTTON_IDS.intent.log_symptom) {
+        forcedIntent = 'symptom';
+    }
+
+    if (forcedIntent) {
+        // We need to re-process the original message with the forced intent.
+        // This requires access to the `handleNaturalLanguage` function from `index.js`.
+        // To avoid circular dependencies, we'll get it from the module cache.
+        const { handleNaturalLanguage } = require('../../index');
+
+        // Create a fake message object to pass to the handler
+        const fakeMessage = {
+            ...interaction.message,
+            author: interaction.user,
+            content: pending.originalMessage,
+            // Re-parsing, so we need a reply method.
+            // Let's edit the interaction reply.
+            reply: (options) => {
+                // First time we just update the original "how should I log this" message
+                return interaction.update({ ...options, components: [] });
+            }
+        };
+
+        // Add a flag to the fake message to indicate it's a re-parse
+        fakeMessage.isReparse = true;
+        fakeMessage.forcedIntent = forcedIntent;
+
+        console.log(`[ButtonHandler] Re-parsing with forced intent: '${forcedIntent}'`);
+        await handleNaturalLanguage(fakeMessage);
     }
 }
 

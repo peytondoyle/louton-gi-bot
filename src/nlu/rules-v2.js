@@ -67,6 +67,7 @@ const INTENT_KEYWORDS = {
  */
 function rulesParse(text, options = {}) {
     const tz = options.tz || 'America/Los_Angeles';
+    const forcedIntent = options.forcedIntent || null;
     const originalText = text.trim();
     const t = originalText.toLowerCase();
 
@@ -166,6 +167,15 @@ function rulesParse(text, options = {}) {
     if (/^(bye|goodbye|good\s*bye|see\s*ya|see\s*you|later|night|good\s*night|gn|ttyl|talk\s*later)/i.test(t)) {
         result.intent = "farewell";
         result.confidence = 0.95;
+        return result;
+    }
+
+    // Question Detection (must happen before loggable intents)
+    const QUESTION_STARTERS = /^(what|how many|how much|show me|did I|am I|can you tell me|list all)/i;
+    if (QUESTION_STARTERS.test(t) || t.endsWith('?')) {
+        result.intent = "question";
+        result.confidence = 0.90;
+        result.slots.query = originalText;
         return result;
     }
 
@@ -389,6 +399,29 @@ function rulesParse(text, options = {}) {
     result.confidence = 0.3;
     result.missing.push("clarification_needed");
 
+    // ========== 8. FORCED INTENT OVERRIDE ==========
+    if (forcedIntent && result.intent !== forcedIntent) {
+        console.log(`[NLU-V2] ⚠️ Intent forced from '${result.intent}' to '${forcedIntent}'`);
+        result.intent = forcedIntent;
+        // Re-evaluate confidence and missing slots based on the new intent
+        if (forcedIntent === 'food' || forcedIntent === 'drink') {
+            if (result.slots.item) {
+                result.confidence = 0.88; // High confidence after user clarification
+                result.missing = result.missing.filter(m => m !== 'item');
+            } else {
+                result.confidence = 0.70;
+                result.missing.push('item');
+            }
+        } else if (forcedIntent === 'symptom' || forcedIntent === 'reflux') {
+            if (result.slots.severity) {
+                result.confidence = 0.88;
+            } else {
+                result.confidence = 0.70;
+                result.missing.push('severity');
+            }
+        }
+    }
+
     return result;
 }
 
@@ -587,9 +620,40 @@ function hasHeadNoun(text) {
     return HEAD_NOUNS.some(noun => lower.includes(noun));
 }
 
+/**
+ * Calculate a simple complexity score for a user's message.
+ * @param {string} text - The user input.
+ * @returns {number} A score representing the complexity.
+ */
+function calculateComplexity(text) {
+    const lower = text.toLowerCase();
+    let score = 0;
+
+    // Length bonus
+    if (text.length > 20) score++;
+    if (text.length > 40) score++;
+
+    // Conjunctions add complexity
+    if (/\b(and|but|with|then)\b/.test(lower)) score++;
+
+    // Mixing food and symptom keywords is complex
+    const foodKeywords = ['ate', 'had', 'food', 'drank', 'drink', ...HEAD_NOUNS];
+    const symptomKeywords = ['pain', 'ache', 'bloat', 'reflux', 'heartburn', 'nausea', 'sick'];
+
+    const hasFood = foodKeywords.some(k => lower.includes(k));
+    const hasSymptom = symptomKeywords.some(k => lower.includes(k));
+
+    if (hasFood && hasSymptom) {
+        score += 2; // High complexity signal
+    }
+
+    return score;
+}
+
 module.exports = {
     rulesParse,
     extractItemAndSides,
     chooseItemFromHeadNoun,
-    hasHeadNoun
+    hasHeadNoun,
+    calculateComplexity
 };

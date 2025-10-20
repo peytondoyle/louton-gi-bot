@@ -18,19 +18,23 @@ function getClient() {
 }
 
 // System prompt - strict JSON extractor, no prose
-const SYSTEM_PROMPT = `You are a strict information extractor for GI tracking. Return ONLY strict JSON with this exact schema:
-{"intent":"food|drink|symptom|reflux|bm|checkin|other","slots":{},"confidence":0.0,"missing":[]}
+const SYSTEM_PROMPT = `You are a strict information extractor for GI tracking. Return ONLY strict JSON based on the user's message.
+The JSON output should be an object containing a single key "actions", which is an array of logging actions.
+
+Schema for each action in the array:
+{"intent":"food|drink|symptom|reflux|bm|checkin|other","slots":{...},"confidence":0.0,"missing":[]}
 
 Rules:
-- Choose ONE intent only (food, drink, symptom, reflux, bm, checkin, or other)
+- ALWAYS return an array, even for a single action: {"actions": [{...}]}
+- Extract ALL actions from the message. E.g., "had pizza and felt bloated" -> 2 actions.
 - For food/drink: slots {item, meal_time?, quantity?, brand?, time?}
 - For symptom: slots {symptom_type ∈ "reflux"|"pain"|"bloat"|"nausea"|"general", severity 1..10?, time?}
 - For reflux: slots {severity 1..10?, time?}
 - For bm: slots {bristol 1..7?, time?}
-- Return confidence 0.0-1.0
-- List missing critical slots in "missing" array
-- NO prose, NO explanations, NO markdown
-- Temperature 0 for consistency`;
+- Confidence is your certainty of the extraction (0.0-1.0).
+- List missing critical slots in the "missing" array for each action.
+- NO prose, NO explanations, NO markdown.
+- Temperature 0 for consistency.`;
 
 /**
  * Normalize text for cache key
@@ -76,7 +80,7 @@ async function llmPinch(text) {
         const response = await openai.chat.completions.create({
             model: 'gpt-4o-mini',           // Fast & cheap
             temperature: 0,                  // Deterministic
-            max_tokens: 64,                  // Tiny response
+            max_tokens: 256,                 // Increased for multi-action
             messages: [
                 { role: 'system', content: SYSTEM_PROMPT },
                 { role: 'user', content: text }
@@ -99,17 +103,17 @@ async function llmPinch(text) {
         const parsed = JSON.parse(content);
 
         // Validate response structure
-        if (!parsed || typeof parsed !== 'object' || !parsed.intent) {
-            console.log('[LLM-PINCH] ❌ Invalid JSON structure');
+        if (!parsed || typeof parsed !== 'object' || !Array.isArray(parsed.actions)) {
+            console.log('[LLM-PINCH] ❌ Invalid JSON structure - "actions" array not found');
             return null;
         }
 
-        console.log(`[LLM-PINCH] ✅ Success (${elapsed}ms) - intent: ${parsed.intent}, confidence: ${parsed.confidence}`);
+        console.log(`[LLM-PINCH] ✅ Success (${elapsed}ms) - found ${parsed.actions.length} actions.`);
 
         // Cache the result
-        llmCache.set(cacheKey, parsed);
+        llmCache.set(cacheKey, parsed.actions);
 
-        return parsed;
+        return parsed.actions;
 
     } catch (error) {
         clearTimeout(timeoutId);

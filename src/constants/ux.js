@@ -92,7 +92,14 @@ const BUTTON_IDS = {
 
     // Actions
     undo: 'undo_last',
-    dismiss: 'dismiss_msg'
+    dismiss: 'dismiss_msg',
+
+    // Intent clarification
+    intent: {
+        log_food: 'intent_log_food',
+        log_symptom: 'intent_log_symptom',
+        cancel: 'intent_cancel'
+    }
 };
 
 // Button Labels
@@ -129,7 +136,13 @@ const BUTTON_LABELS = {
     },
 
     undo: '↩️ Undo Last Entry',
-    dismiss: '✖️ Dismiss'
+    dismiss: '✖️ Dismiss',
+
+    intent: {
+        log_food: 'Log Food/Drink',
+        log_symptom: 'Log Symptom',
+        cancel: 'Cancel'
+    }
 };
 
 // Canned Response Phrases

@@ -277,6 +277,33 @@ function buttonDismiss() {
 }
 
 /**
+ * Build intent clarification buttons
+ * @returns {ActionRowBuilder} Button row for clarifying user intent
+ *
+ * Used when NLU confidence is low or intent is 'other'
+ */
+function buttonsIntentClarification() {
+    const row = new ActionRowBuilder()
+        .addComponents(
+            new ButtonBuilder()
+                .setCustomId(BUTTON_IDS.intent.log_food)
+                .setLabel(BUTTON_LABELS.intent.log_food)
+                .setStyle(ButtonStyle.Primary)
+                .setEmoji(EMOJI.food),
+            new ButtonBuilder()
+                .setCustomId(BUTTON_IDS.intent.log_symptom)
+                .setLabel(BUTTON_LABELS.intent.log_symptom)
+                .setStyle(ButtonStyle.Primary)
+                .setEmoji(EMOJI.symptom),
+            new ButtonBuilder()
+                .setCustomId(BUTTON_IDS.intent.cancel)
+                .setLabel(BUTTON_LABELS.intent.cancel)
+                .setStyle(ButtonStyle.Secondary)
+        );
+    return [row];
+}
+
+/**
  * Build a success confirmation embed
  * @param {string} message - Success message
  * @param {Object} details - Optional details to display
@@ -335,6 +362,7 @@ module.exports = {
     buttonsBristol,
     buttonsSeverity,
     buttonsCheckIn,
+    buttonsIntentClarification,
     buttonUndo,
     buttonDismiss,
     successEmbed,

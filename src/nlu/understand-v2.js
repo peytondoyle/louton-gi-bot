@@ -9,7 +9,7 @@
  * - Reject (<0.65): Request clarification
  */
 
-const { rulesParse } = require('./rules-v2');
+const { rulesParse, calculateComplexity } = require('./rules-v2');
 const { CONFIDENCE_THRESHOLDS, isMinimalCoreFood } = require('./ontology-v2');
 
 // Metrics tracking
@@ -35,7 +35,7 @@ async function understand(text, options = {}, contextMemory = null) {
     const tz = options.tz || 'America/Los_Angeles';
 
     // Run rules-based parser V2
-    const rulesResult = rulesParse(text, { tz });
+    const rulesResult = rulesParse(text, { tz, forcedIntent: options.forcedIntent });
 
     // Verify V2 is active
     if (metrics.total === 1) {
@@ -93,30 +93,37 @@ async function understand(text, options = {}, contextMemory = null) {
         return formatResult(rulesResult, `rescued_${rescueType}`);
     }
 
-    // 5. Try LLM Pinch (if confidence ≥0.65 and not conversational)
-    if (rulesResult.confidence >= CONFIDENCE_THRESHOLDS.rescue &&
-        rulesResult.intent !== 'other' &&
-        hasCriticalMissing) {
-        console.log(`[NLU-V2] Attempting LLM pinch for missing slots...`);
+    // 5. Try LLM Pinch for complex or low-confidence messages
+    const complexity = calculateComplexity(text);
+    const shouldUseLLM = (rulesResult.confidence < CONFIDENCE_THRESHOLDS.rescue && complexity >= 1) || complexity >= 2;
+
+    if (shouldUseLLM) {
+        console.log(`[NLU-V2] High complexity (${complexity}) or low confidence. Attempting LLM pinch...`);
 
         try {
             const { llmPinch } = require('./llmPinch');
-            const llmResult = await llmPinch(text, {
-                timeout: 800,
-                cache: true
-            });
+            const llmActions = await llmPinch(text); // Expects an array of actions
 
-            if (llmResult && llmResult.intent) {
-                // Merge LLM results (rules override)
-                const merged = mergeLLMResults(rulesResult, llmResult);
+            if (llmActions && llmActions.length > 0) {
                 metrics.rescued.llm++;
-                console.log(`[NLU-V2] LLM pinch succeeded, filled ${Object.keys(llmResult).length} slots`);
+                console.log(`[NLU-V2] LLM pinch succeeded, found ${llmActions.length} action(s).`);
+
+                // If multiple actions, add them to a special multi-action slot
+                if (llmActions.length > 1) {
+                    const primaryAction = llmActions[0];
+                    primaryAction.multi_actions = llmActions.slice(1);
+                    return formatResult(primaryAction, 'rescued_llm_multi');
+                }
+
+                // Otherwise, merge the single action with the rules result
+                const merged = mergeLLMResults(rulesResult, llmActions[0]);
                 return formatResult(merged, 'rescued_llm');
             }
         } catch (error) {
             console.log(`[NLU-V2] LLM pinch failed:`, error.message);
         }
     }
+
 
     // 6. Request Clarification (missing critical slots)
     if (hasCriticalMissing) {

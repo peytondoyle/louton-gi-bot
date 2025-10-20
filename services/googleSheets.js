@@ -938,6 +938,93 @@ class GoogleSheetsService {
         if (userId === LOUIS_ID) return "Louis";
         return "General"; // fallback
     }
+
+    /**
+     * Executes a structured query against a user's sheet data.
+     * @param {string} sheetName - The name of the sheet to query.
+     * @param {Object} query - The structured JSON query from the AI Analyst.
+     * @returns {Promise<Object>} An object containing the result of the query.
+     */
+    async executeQuery(sheetName, query) {
+        if (!this.initialized) await this.initialize();
+
+        try {
+            const allRows = await this.getRows({}, sheetName);
+            if (!allRows || allRows.length === 0) {
+                return { success: true, data: [], message: "No data found to analyze." };
+            }
+
+            let filteredRows = allRows;
+
+            // Apply filters
+            if (query.filters && Array.isArray(query.filters)) {
+                query.filters.forEach(filter => {
+                    filteredRows = filteredRows.filter(row => {
+                        const rowValue = row[filter.column.toLowerCase()];
+                        if (rowValue === undefined || rowValue === null) return false;
+
+                        const val = filter.value;
+                        const rowVal = typeof rowValue === 'string' ? rowValue.toLowerCase() : rowValue;
+
+                        switch (filter.operator) {
+                            case 'eq': return rowVal == val;
+                            case 'neq': return rowVal != val;
+                            case 'gt': return rowVal > val;
+                            case 'lt': return rowVal < val;
+                            case 'gte': return rowVal >= val;
+                            case 'lte': return rowVal <= val;
+                            case 'contains': return typeof rowVal === 'string' && rowVal.includes(String(val).toLowerCase());
+                            case 'not_contains': return typeof rowVal === 'string' && !rowVal.includes(String(val).toLowerCase());
+                            default: return false;
+                        }
+                    });
+                });
+            }
+
+            // Apply aggregation
+            if (query.aggregation && query.aggregation.type) {
+                const { type, column } = query.aggregation;
+                const colKey = column.toLowerCase();
+
+                switch (type) {
+                    case 'count':
+                        return { success: true, data: { result: filteredRows.length }, aggregation: true };
+                    case 'sum':
+                        const sum = filteredRows.reduce((acc, row) => acc + (parseFloat(row[colKey]) || 0), 0);
+                        return { success: true, data: { result: sum }, aggregation: true };
+                    case 'avg':
+                        const total = filteredRows.reduce((acc, row) => acc + (parseFloat(row[colKey]) || 0), 0);
+                        const avg = filteredRows.length > 0 ? total / filteredRows.length : 0;
+                        return { success: true, data: { result: avg }, aggregation: true };
+                    default:
+                        // Fall through to select if aggregation is unknown
+                        break;
+                }
+            }
+            
+            // Apply select and limit
+            let resultData = filteredRows;
+            if (query.select && Array.isArray(query.select)) {
+                resultData = resultData.map(row => {
+                    const selected = {};
+                    query.select.forEach(col => {
+                        selected[col] = row[col.toLowerCase()];
+                    });
+                    return selected;
+                });
+            }
+
+            if (query.limit) {
+                resultData = resultData.slice(0, query.limit);
+            }
+
+            return { success: true, data: resultData };
+
+        } catch (error) {
+            console.error('[GSheets] Error executing query:', error);
+            return { success: false, error: 'Failed to process your request in the spreadsheet.' };
+        }
+    }
 }
 
 module.exports = new GoogleSheetsService();
