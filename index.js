@@ -315,6 +315,9 @@ async function handleNaturalLanguage(message) {
         return;
     }
 
+    // Track if save succeeded (to prevent false error messages)
+    let saveSucceeded = false;
+
     try {
         // Parse intent and slots with V2
         const userPrefs = await getUserPrefs(userId, googleSheets);
@@ -398,19 +401,26 @@ async function handleNaturalLanguage(message) {
         // Handle based on whether we have missing slots
         if (result.missing.length === 0) {
             // All slots present - log immediately
-            await logFromNLU(message, result);
+            saveSucceeded = await logFromNLU(message, result);
         } else {
             // Ask for missing slots via buttons
             await requestMissingSlots(message, result);
         }
     } catch (error) {
         console.error('NLU Error:', error);
-        await message.reply(`${EMOJI.error} ${getRandomPhrase(PHRASES.error)}`);
+
+        // Only send error if save didn't succeed
+        if (!saveSucceeded) {
+            await message.reply(`${EMOJI.error} ${getRandomPhrase(PHRASES.error)}`);
+        } else {
+            console.warn('[NLU] Error after successful save (not shown to user):', error.message);
+        }
     }
 }
 
 /**
  * Log entry from NLU parse result
+ * @returns {Promise<boolean>} - True if save succeeded, false otherwise
  */
 async function logFromNLU(message, parseResult) {
     const { intent, slots } = parseResult;
@@ -559,7 +569,7 @@ async function logFromNLU(message, parseResult) {
 
     if (!result.success) {
         await message.reply(`${EMOJI.error} ${result.error.userMessage}`);
-        return;
+        return false; // Save failed
     }
 
     console.log(`[SAVE] ✅ Successfully appended to ${sheetName}`);
@@ -683,6 +693,7 @@ async function logFromNLU(message, parseResult) {
     }
 
     console.log('[SAVE] ✅ Post-save operations complete');
+    return true; // Save succeeded
 }
 
 /**
