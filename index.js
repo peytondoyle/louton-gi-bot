@@ -1127,8 +1127,15 @@ function getTypeEmoji(type) {
 // Message handler (supports both DMs and channel messages)
 client.on('messageCreate', async (message) => {
     try {
-        // Ignore bot messages
+        // Ignore bot messages (including self)
         if (message.author.bot) {
+            console.log(`[FILTER] Ignoring bot message from ${message.author.tag}`);
+            return;
+        }
+
+        // Additional safety: ignore messages from the bot's own user ID
+        if (message.author.id === client.user?.id) {
+            console.log(`[FILTER] Ignoring self-message from bot user ID`);
             return;
         }
 
