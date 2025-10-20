@@ -43,6 +43,8 @@ const uxButtons = require('./src/handlers/uxButtons');
 const { isDuplicate } = require('./src/utils/dedupe');
 const { validateQuality } = require('./src/utils/qualityCheck');
 const { generateQuery, synthesizeAnswer } = require('./src/insights/AIAnalyst');
+const DialogManager = require('./src/dialogs/DialogManager');
+const symptomLogDialog = require('./src/dialogs/symptomLogDialog');
 
 // Calorie estimation
 const { estimateCaloriesForItemAndSides } = require('./src/nutrition/estimateCalories');
@@ -210,6 +212,9 @@ client.once('ready', async () => {
         setupReminders();
     }
 
+    // Initialize the DialogManager with the logging function
+    symptomLogDialog.initialize(logFromNLU);
+
     console.log('🚀 Bot is fully operational and ready for commands!');
 });
 
@@ -271,6 +276,13 @@ async function handleNaturalLanguage(message) {
     const text = message.content.trim();
     const userId = message.author.id;
     const userTag = message.author.tag;
+
+    // --- DIALOG MANAGER ---
+    // If a dialog is active, route the message to the manager and stop further processing.
+    if (DialogManager.hasActiveDialog(userId)) {
+        await DialogManager.handleResponse(message);
+        return;
+    }
 
     // ========== CONTEXTUAL FOLLOW-UP ==========
     const pendingContext = contextMemory.getPendingContext(userId);
@@ -381,6 +393,11 @@ async function handleNaturalLanguage(message) {
             // It's not a loggable intent, and not a known conversational one.
             // Let's check if it's a question before giving up.
             if (result.intent !== 'question') {
+                // This is a potential trigger for a dialog if the intent is 'other' or low-confidence symptom
+                if (result.intent === 'symptom' && result.missing.length > 0) {
+                    await DialogManager.startDialog('symptom_log', message, result.slots);
+                    return;
+                }
                 await requestIntentClarification(message);
                 return;
             }
