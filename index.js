@@ -15,6 +15,7 @@ const NLPHandler = require('./utils/nlpHandler');
 const PatternAnalyzer = require('./utils/patternAnalyzer');
 const ClarificationHandler = require('./utils/clarificationHandler');
 const keepAlive = require('./keep_alive');
+const { getUserProfile, updateUserProfile, ensureProfileSheet } = require('./services/userProfile');
 
 // NLU System imports - V2 UPGRADE
 const { understand, formatParseResult } = require('./src/nlu/understand-v2');
@@ -174,6 +175,9 @@ client.once('ready', async () => {
         await googleSheets.initialize();
         console.log('✅ Connected to Google Sheets');
 
+        // Ensure User_Profiles sheet exists before other tabs
+        await ensureProfileSheet();
+
         // Ensure tabs exist for multi-user support
         console.log('🔧 Ensuring user tabs exist...');
         await googleSheets.ensureSheetAndHeaders('Peyton', [
@@ -192,7 +196,8 @@ client.once('ready', async () => {
         await scheduleAll(client, googleSheets, {
             getLogSheetNameForUser: googleSheets.getLogSheetNameForUser.bind(googleSheets),
             getTodayEntries: googleSheets.getTodayEntries.bind(googleSheets),
-            setUserPrefs: (id, partial) => setUserPrefs(id, partial, googleSheets)
+            // Pass the updateUserProfile function for the scheduler to use
+            updateUserProfile: (id, profile) => updateUserProfile(id, profile, googleSheets)
         });
         console.log('✅ Proactive reminders initialized');
     } catch (error) {
@@ -216,15 +221,15 @@ client.on('interactionCreate', async (interaction) => {
     // Check if user is under watch (within 20 min of reminder)
     const userId = interaction.user.id;
     if (isUnderWatch(userId)) {
-        const prefs = await getUserPrefs(userId, googleSheets);
-        await markInteracted(userId, prefs, googleSheets);
+        const profile = await getUserProfile(userId, googleSheets);
+        await markInteracted(userId, profile.prefs, googleSheets);
     }
 
     // Route chart buttons
     if (interaction.customId.startsWith('chart:')) {
         const chartDeps = {
             googleSheets,
-            getUserPrefs,
+            getUserProfile,
             getLogSheetNameForUser: googleSheets.getLogSheetNameForUser,
             PEYTON_ID
         };
@@ -312,8 +317,8 @@ async function handleNaturalLanguage(message) {
 
     try {
         // Parse intent and slots with V2
-        const userPrefs = await getUserPrefs(userId, googleSheets);
-        const tz = userPrefs.TZ || TIMEZONE;
+        const profile = await getUserProfile(userId, googleSheets);
+        const tz = profile.prefs.TZ || TIMEZONE;
 
         const understandOptions = { userId, tz };
         if (message.forcedIntent) {
@@ -582,6 +587,39 @@ async function logFromNLU(message, parseResult) {
     const isPeyton = (userId === PEYTON_ID);
     const sheetName = getSheetName(userId, userTag);
 
+    // Get user profile for learned calories
+    const userProfile = await getUserProfile(userId, googleSheets);
+
+    let caloriesVal = null;
+    if ((intent === 'food' || intent === 'drink') && isPeyton) {
+        // --- PERSONALIZED CALORIE MEMORY ---
+        const fullItemDescription = (slots.item + (slots.sides ? `, ${slots.sides}` : '')).toLowerCase().trim();
+
+        // 1. Check for a learned value first for consistency
+        if (userProfile.learnedCalorieMap && userProfile.learnedCalorieMap[fullItemDescription]) {
+            caloriesVal = userProfile.learnedCalorieMap[fullItemDescription];
+            console.log(`[CAL-MEM] ✅ Recalled calories for "${fullItemDescription}": ${caloriesVal} kcal`);
+        } else {
+            // 2. If not found, estimate it
+            try {
+                caloriesVal = await estimateCaloriesForItemAndSides(slots.item, slots.sides);
+                
+                // 3. If estimation is successful, learn it for next time
+                if (caloriesVal !== null && caloriesVal > 0) {
+                    console.log(`[CAL-MEM] 🧠 Learning calories for "${fullItemDescription}": ${caloriesVal} kcal`);
+                    userProfile.learnedCalorieMap[fullItemDescription] = caloriesVal;
+                    // Fire-and-forget the update, don't block logging
+                    updateUserProfile(userId, userProfile, googleSheets).catch(err => {
+                        console.error(`[USER_PROFILE] Non-blocking profile update failed: ${err.message}`);
+                    });
+                }
+            } catch (e) {
+                console.error(`[CAL-EST] CRITICAL: Calorie estimation failed unexpectedly for "${slots.item}". Error: ${e.message}`);
+                caloriesVal = null; // Proceed with logging, calories will be null
+            }
+        }
+    }
+
     // ========== BUILD APPEND PAYLOAD ==========
     const { buildNotesFromParse } = require('./src/utils/notesBuild');
 
@@ -665,19 +703,19 @@ async function logFromNLU(message, parseResult) {
     }
 
     // Estimate calories for Peyton only (with portion multiplier)
-    let caloriesVal = null;
-    if (intent === 'food' && isPeyton) {
-        try {
-            caloriesVal = await estimateCaloriesForItemAndSides(slots.item, slots.sides);
-        } catch (e) {
-            console.error(`[CAL-EST] CRITICAL: Calorie estimation failed unexpectedly for "${slots.item}". Error: ${e.message}`);
-            // Do not re-throw. Proceed with logging, calories will be null.
-            caloriesVal = null;
-        }
-    } else if (intent === 'food' && !isPeyton) {
-        // Louis: explicitly no calorie tracking
-        notes.push('calories=disabled');
-    }
+    // This block is now redundant as caloriesVal is calculated above
+    // if (intent === 'food' && isPeyton) {
+    //     try {
+    //         caloriesVal = await estimateCaloriesForItemAndSides(slots.item, slots.sides);
+    //     } catch (e) {
+    //         console.error(`[CAL-EST] CRITICAL: Calorie estimation failed unexpectedly for "${slots.item}". Error: ${e.message}`);
+    //         // Do not re-throw. Proceed with logging, calories will be null.
+    //         caloriesVal = null;
+    //     }
+    // } else if (intent === 'food' && !isPeyton) {
+    //     // Louis: explicitly no calorie tracking
+    //     notes.push('calories=disabled');
+    // }
 
     // Build Details field with null guards
     let details = '';
@@ -970,8 +1008,8 @@ client.on('messageCreate', async (message) => {
         // Check if user is under watch (within 20 min of reminder)
         const userId = message.author.id;
         if (isUnderWatch(userId)) {
-            const prefs = await getUserPrefs(userId, googleSheets);
-            await markInteracted(userId, prefs, googleSheets);
+            const profile = await getUserProfile(userId, googleSheets);
+            await markInteracted(userId, profile.prefs, googleSheets);
         }
 
         // Extract message info
@@ -1073,6 +1111,8 @@ async function handleGoal(message, args) {
 // Handle reminders command - configure proactive reminders
 async function handleReminders(message, args) {
     const userId = message.author.id;
+    const profile = await getUserProfile(userId, googleSheets);
+    const currentPrefs = profile.prefs;
 
     if (!args || args.trim() === '' || args.trim().toLowerCase() === 'reminders' || args.trim().toLowerCase() === 'settings') {
         return message.reply(
@@ -1089,11 +1129,12 @@ async function handleReminders(message, args) {
 
     // Handle on/off
     if (sub === 'on' || sub === 'off') {
-        await setUserPrefs(userId, { DM: sub }, googleSheets);
+        profile.prefs.DM = sub;
+        await updateUserProfile(userId, profile, googleSheets);
         await updateUserSchedule(client, googleSheets, userId, {
             getLogSheetNameForUser: googleSheets.getLogSheetNameForUser.bind(googleSheets),
             getTodayEntries: googleSheets.getTodayEntries.bind(googleSheets),
-            setUserPrefs: (id, partial) => setUserPrefs(id, partial, googleSheets)
+            updateUserProfile: (id, profile) => updateUserProfile(id, profile, googleSheets)
         });
         return message.reply(`🔔 Reminders ${sub === 'on' ? '**enabled**' : '**disabled**'}.`);
     }
@@ -1115,11 +1156,12 @@ async function handleReminders(message, args) {
             return message.reply('⚠️ Invalid time format. Use HH:MM (e.g., `08:00` or `20:30`)');
         }
 
-        await setUserPrefs(userId, { [key]: timeValue }, googleSheets);
+        profile.prefs[key] = timeValue;
+        await updateUserProfile(userId, profile, googleSheets);
         await updateUserSchedule(client, googleSheets, userId, {
             getLogSheetNameForUser: googleSheets.getLogSheetNameForUser.bind(googleSheets),
             getTodayEntries: googleSheets.getTodayEntries.bind(googleSheets),
-            setUserPrefs: (id, partial) => setUserPrefs(id, partial, googleSheets)
+            updateUserProfile: (id, profile) => updateUserProfile(id, profile, googleSheets)
         });
 
         const labelMap = {
@@ -1138,15 +1180,15 @@ async function handleReminders(message, args) {
 
 // Handle DND, Timezone, Snooze commands (Phase 4)
 async function handleDND(message, args) {
-    await dndCommands.handleDND(message, args, { getUserPrefs, setUserPrefs, googleSheets });
+    await dndCommands.handleDND(message, args, { getUserProfile, updateUserProfile, googleSheets });
 }
 
 async function handleTimezone(message, args) {
-    await dndCommands.handleTimezone(message, args, { getUserPrefs, setUserPrefs, googleSheets });
+    await dndCommands.handleTimezone(message, args, { getUserProfile, updateUserProfile, googleSheets });
 }
 
 async function handleSnooze(message, args) {
-    await dndCommands.handleSnooze(message, args, { getUserPrefs, setUserPrefs, googleSheets });
+    await dndCommands.handleSnooze(message, args, { getUserProfile, updateUserProfile, googleSheets });
 }
 
 function setupReminders() {

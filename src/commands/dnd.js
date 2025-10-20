@@ -10,11 +10,12 @@ const { computeNextSend } = require('../reminders/adaptive');
  * Handle !dnd command
  * @param {Object} message - Discord message
  * @param {string} args - Command arguments
- * @param {Object} deps - { getUserPrefs, setUserPrefs, googleSheets }
+ * @param {Object} deps - { getUserProfile, updateUserProfile, googleSheets }
  */
 async function handleDND(message, args, deps) {
-    const { getUserPrefs, setUserPrefs, googleSheets } = deps;
+    const { getUserProfile, updateUserProfile, googleSheets } = deps;
     const userId = message.author.id;
+    const profile = await getUserProfile(userId, googleSheets);
 
     if (!args) {
         return message.reply('Usage: `!dnd 22:00-07:00` or `!dnd off`');
@@ -24,8 +25,9 @@ async function handleDND(message, args, deps) {
 
     // Turn off DND
     if (trimmed === 'off') {
-        await setUserPrefs(userId, { DNDWindow: '' }, googleSheets);
-        await message.reply('✅ Do Not Disturb mode disabled. You\'ll receive all reminders again.');
+        await message.reply('🌙 DND window disabled.');
+        profile.prefs.DNDWindow = '';
+        await updateUserProfile(userId, profile, googleSheets);
         return;
     }
 
@@ -48,7 +50,9 @@ async function handleDND(message, args, deps) {
     // Format and save
     const formatted = `${String(startH).padStart(2, '0')}:${String(startM).padStart(2, '0')}-${String(endH).padStart(2, '0')}:${String(endM).padStart(2, '0')}`;
 
-    await setUserPrefs(userId, { DNDWindow: formatted }, googleSheets);
+    await message.reply(`🌙 DND window set to **${formatted}**.`);
+    profile.prefs.DNDWindow = formatted;
+    await updateUserProfile(userId, profile, googleSheets);
 
     const overnight = startH > endH || (startH === endH && startM > endM);
     const windowDesc = overnight ? '(overnight window)' : '';
@@ -61,12 +65,14 @@ async function handleDND(message, args, deps) {
 /**
  * Handle !timezone command
  * @param {Object} message - Discord message
- * @param {string} args - Timezone (IANA format)
- * @param {Object} deps - { getUserPrefs, setUserPrefs, googleSheets }
+ * @param {string} args - Command arguments
+ * @param {Object} deps - { getUserProfile, updateUserProfile, googleSheets }
  */
 async function handleTimezone(message, args, deps) {
-    const { getUserPrefs, setUserPrefs, googleSheets } = deps;
+    const { getUserProfile, updateUserProfile, googleSheets } = deps;
     const userId = message.author.id;
+    const profile = await getUserProfile(userId, googleSheets);
+    const currentTz = profile.prefs.TZ || 'America/Los_Angeles';
 
     if (!args) {
         const prefs = await getUserPrefs(userId, googleSheets);
@@ -80,7 +86,9 @@ async function handleTimezone(message, args, deps) {
         return message.reply(`❌ Invalid timezone "${tz}".\n\nExamples: America/New_York, America/Los_Angeles, Europe/London`);
     }
 
-    await setUserPrefs(userId, { TZ: tz }, googleSheets);
+    await message.reply(`✅ Timezone set to **${tz}**.`);
+    profile.prefs.TZ = tz;
+    await updateUserProfile(userId, profile, googleSheets);
 
     const currentTime = moment().tz(tz).format('HH:mm');
     await message.reply(`✅ Timezone set to **${tz}**\n\nYour local time is now: ${currentTime}`);
@@ -91,14 +99,15 @@ async function handleTimezone(message, args, deps) {
 /**
  * Handle !snooze command
  * @param {Object} message - Discord message
- * @param {string} args - Duration (1h, 3h, 1d)
- * @param {Object} deps - { getUserPrefs, setUserPrefs, googleSheets }
+ * @param {string} args - Command arguments
+ * @param {Object} deps - { getUserProfile, updateUserProfile, googleSheets }
  */
 async function handleSnooze(message, args, deps) {
-    const { getUserPrefs, setUserPrefs, googleSheets } = deps;
+    const { getUserProfile, updateUserProfile, googleSheets } = deps;
     const userId = message.author.id;
-    const prefs = await getUserPrefs(userId, googleSheets);
-    const tz = prefs.TZ || 'America/Los_Angeles';
+    const profile = await getUserProfile(userId, googleSheets);
+    const tz = profile.prefs.TZ || 'America/Los_Angeles';
+    const now = moment().tz(tz);
 
     if (!args) {
         return message.reply('Usage: `!snooze 1h` or `!snooze 3h` or `!snooze 1d`');
@@ -126,16 +135,11 @@ async function handleSnooze(message, args, deps) {
         return message.reply('❌ Unit must be h (hours) or d (days)');
     }
 
-    await setUserPrefs(userId, { SnoozeUntil: snoozeUntil.toISOString() }, googleSheets);
-
-    const untilStr = snoozeUntil.format('MMM DD, h:mm A');
-    await message.reply(`✅ All reminders snoozed until **${untilStr}**\n\nYou can still use commands and log manually.`);
+    await message.reply(`Okay, snoozing reminders until **${snoozeUntil.tz(tz).format('ddd, h:mm a')}**.`);
+    profile.prefs.SnoozeUntil = snoozeUntil.toISOString();
+    await updateUserProfile(userId, profile, googleSheets);
 
     console.log(`[SNOOZE] User ${userId} snoozed until ${snoozeUntil.toISOString()}`);
 }
 
-module.exports = {
-    handleDND,
-    handleTimezone,
-    handleSnooze
-};
+module.exports = { handleDND, handleTimezone, handleSnooze };

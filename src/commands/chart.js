@@ -19,17 +19,21 @@ const {
     buildLatencyDistribution,
     buildTriggerLiftBars
 } = require('../charts/builders');
+const { ChartService } = require('../charts/ChartService');
+const { ActionRowBuilder, ButtonBuilder, ButtonStyle } = require('discord.js');
 
 /**
- * Handle !chart command
- * @param {Object} message - Discord message
- * @param {string} args - Command arguments
- * @param {Object} deps - { googleSheets, getUserPrefs, getLogSheetNameForUser, PEYTON_ID }
+ * Main handler for chart generation
+ * @param {Message|import('discord.js').CommandInteraction} source - The message or interaction that triggered the command
+ * @param {string[]} args - Command arguments
+ * @param {Object} deps - { googleSheets, getUserProfile, getLogSheetNameForUser, PEYTON_ID }
  */
-async function handleChart(message, args, deps) {
-    const { googleSheets, getUserPrefs, getLogSheetNameForUser, PEYTON_ID } = deps;
+async function handleChart(source, args, deps) {
+    const { googleSheets, getUserProfile, getLogSheetNameForUser, PEYTON_ID } = deps;
+    const isInteraction = !!source.isCommand;
+    const userId = isInteraction ? source.user.id : source.author.id;
+    const userTag = isInteraction ? source.user.tag : source.author.tag;
 
-    const userId = message.author.id;
     const isPeyton = (userId === PEYTON_ID);
     const sheetName = getLogSheetNameForUser(userId);
 
@@ -39,18 +43,22 @@ async function handleChart(message, args, deps) {
     const period = parts[1] || 'today';
 
     if (!chartType) {
-        return message.reply('Usage: `!chart <type> [period]`\n\nTypes: budget, intake, reflux, latency, triggers\nPeriods: today, 7d, 14d, 28d, 30d\n\nExample: `!chart budget today`');
+        return source.reply('Usage: `!chart <type> [period]`\n\nTypes: budget, intake, reflux, latency, triggers\nPeriods: today, 7d, 14d, 28d, 30d\n\nExample: `!chart budget today`');
     }
 
-    // Get user prefs for timezone
-    const prefs = await getUserPrefs(userId, googleSheets);
-    const tz = prefs.TZ || 'America/Los_Angeles';
+    const service = new ChartService({
+        sheetName: getLogSheetNameForUser(userId),
+        userTag: userTag,
+        googleSheets: googleSheets
+    });
 
-    // Parse days from period
-    const daysMap = { 'today': 1, '7d': 7, '14d': 14, '28d': 28, '30d': 30 };
-    const days = daysMap[period] || 7;
+    const profile = await getUserProfile(userId, googleSheets);
+    const tz = profile.prefs.TZ;
 
-    await message.channel.sendTyping(); // Show loading indicator
+    let chartUrl = null;
+    let chartTitle = 'Chart';
+
+    await source.channel.sendTyping(); // Show loading indicator
 
     try {
         let buffer, caption;
@@ -77,16 +85,16 @@ async function handleChart(message, args, deps) {
                 break;
 
             default:
-                return message.reply(`❌ Unknown chart type: \`${chartType}\`\n\nAvailable: budget, intake, reflux, latency, triggers`);
+                return source.reply(`❌ Unknown chart type: \`${chartType}\`\n\nAvailable: budget, intake, reflux, latency, triggers`);
         }
 
         if (!buffer) {
-            return message.reply(caption || '❌ Failed to generate chart. Please try again.');
+            return source.reply(caption || '❌ Failed to generate chart. Please try again.');
         }
 
         // Send chart as attachment
         const attachment = new AttachmentBuilder(buffer, { name: 'chart.png' });
-        await message.channel.send({
+        await source.channel.send({
             content: caption,
             files: [attachment]
         });
@@ -94,7 +102,7 @@ async function handleChart(message, args, deps) {
         console.log(`[CHARTS] ✅ Sent ${chartType} chart to user ${userId}`);
     } catch (error) {
         console.error('[CHARTS] ❌ Error generating chart:', error);
-        await message.reply('❌ Failed to generate chart. Please try again later.');
+        await source.reply('❌ Failed to generate chart. Please try again later.');
     }
 }
 

@@ -4,6 +4,7 @@
  */
 
 const { recordReminderOutcome } = require('./adaptive');
+const { updateUserProfile, getUserProfile } = require('../../services/userProfile');
 
 // In-memory active watchers: userId -> { type, messageId, expiresAt, timeout }
 const activeWatchers = new Map();
@@ -68,10 +69,10 @@ function clearWatcher(userId) {
 }
 
 /**
- * Mark user as having interacted (message or button tap)
- * @param {string} userId - Discord user ID
- * @param {Object} prefs - User preferences
- * @param {Object} googleSheets - Sheets service
+ * Marks a user as having responded to a reminder.
+ * @param {string} userId - The Discord user ID.
+ * @param {object} prefs - The user's preferences object.
+ * @param {object} googleSheets - The Google Sheets service instance.
  */
 async function markInteracted(userId, prefs, googleSheets) {
     const watcher = activeWatchers.get(userId);
@@ -90,7 +91,13 @@ async function markInteracted(userId, prefs, googleSheets) {
             googleSheets
         });
 
-        console.log(`[ADAPTIVE] User ${userId} interacted with ${watcher.type} reminder`);
+        // Update profile directly instead of separate prefs
+        const profile = await getUserProfile(userId, googleSheets);
+        profile.prefs.IgnoredCount = 0;
+        profile.prefs.AdaptiveShiftMin = 0;
+        await updateUserProfile(userId, profile, googleSheets);
+
+        console.log(`[WATCHER] User ${userId} interacted. Resetting ignored count.`);
     } catch (error) {
         console.error(`[ADAPTIVE] Failed to record interacted outcome for ${userId}:`, error);
     }

@@ -7,9 +7,16 @@ const moment = require('moment-timezone');
 const { getUserPrefs, listAllPrefs, setUserPrefs, isOnCooldown } = require('../../services/prefs');
 const { shouldSuppressNow, computeNextSend } = require('../reminders/adaptive');
 const { startResponseWatcher } = require('../reminders/responseWatcher');
+const {
+    isWithinDND,
+    getSnoozeUntil,
+    getReminderCooldown
+} = require('../reminders/dnd');
+const { getUserProfile, updateUserProfile } = require('../../services/userProfile');
 
 // Active cron tasks per user: Map<userId, { morning, evening, inactivity }>
 const tasks = new Map();
+const scheduledJobs = new Map(); // Global registry for cron jobs
 
 /**
  * Stop all cron tasks in a bucket

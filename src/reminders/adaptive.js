@@ -5,6 +5,9 @@
 
 const moment = require('moment-timezone');
 
+const MAX_ADAPTIVE_SHIFT_MIN = 120; // Max 2 hours
+const IGNORED_THRESHOLD = 3; // Nudges after 3 consecutive ignores
+
 /**
  * Check if current time is in DND window or snoozed
  * @param {Object} options - { userPrefs, nowZoned }
@@ -81,33 +84,28 @@ function computeNextSend(baseHHmm, { tz, adaptiveShiftMin = 0 }) {
 }
 
 /**
- * Record reminder outcome and update adaptive shift
- * @param {Object} options - { userId, prefs, outcome, setUserPrefs, googleSheets }
- * @returns {Promise<void>}
+ * Records the outcome of a reminder and updates adaptive settings.
+ * @param {Object} options - { userId, profile, outcome, googleSheets, updateUserProfile }
  */
-async function recordReminderOutcome({ userId, prefs, outcome, setUserPrefs, googleSheets }) {
-    if (outcome === 'ignored') {
-        // Increment ignored count and shift later by 15 min
-        const newIgnoredCount = (prefs.IgnoredCount || 0) + 1;
-        const newShift = Math.min((prefs.AdaptiveShiftMin || 0) + 15, 90);
+async function recordReminderOutcome({ userId, profile, outcome, googleSheets, updateUserProfile }) {
+    let { IgnoredCount = 0, AdaptiveShiftMin = 0 } = profile.prefs;
 
-        await setUserPrefs(userId, {
-            IgnoredCount: newIgnoredCount,
-            AdaptiveShiftMin: newShift
-        }, googleSheets);
-
-        console.log(`[ADAPTIVE] User ${userId} ignored reminder → shift now ${newShift}min (ignored: ${newIgnoredCount})`);
-    } else if (outcome === 'interacted') {
-        // Reset ignored count and shift earlier by 10 min
-        const newShift = Math.max((prefs.AdaptiveShiftMin || 0) - 10, -60);
-
-        await setUserPrefs(userId, {
-            IgnoredCount: 0,
-            AdaptiveShiftMin: newShift
-        }, googleSheets);
-
-        console.log(`[ADAPTIVE] User ${userId} interacted → shift now ${newShift}min (reset ignored count)`);
+    if (outcome === 'interacted') {
+        IgnoredCount = 0;
+        AdaptiveShiftMin = Math.max(0, AdaptiveShiftMin - 15); // Recover 15 min
+    } else if (outcome === 'ignored') {
+        IgnoredCount++;
+        if (IgnoredCount >= IGNORED_THRESHOLD) {
+            AdaptiveShiftMin = Math.min(MAX_ADAPTIVE_SHIFT_MIN, AdaptiveShiftMin + 30); // Delay by 30 min
+        }
     }
+
+    // Update the profile
+    profile.prefs.IgnoredCount = IgnoredCount;
+    profile.prefs.AdaptiveShiftMin = AdaptiveShiftMin;
+    await updateUserProfile(userId, profile, googleSheets);
+
+    console.log(`[ADAPTIVE] User ${userId} outcome: ${outcome}. New state - Ignored: ${IgnoredCount}, Shift: ${AdaptiveShiftMin}m`);
 }
 
 /**
