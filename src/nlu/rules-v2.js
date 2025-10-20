@@ -49,8 +49,10 @@ const {
 } = require('./ontology-v2');
 
 const { safeCorrectToken, correctTokens } = require('../utils/spell');
-const { parseTimeInfo } = require('../utils/timeParse');
 const { extractPortion } = require('../nutrition/portionParser');
+const { EMOJI, PHRASES } = require('../constants/ux');
+const { getMealTime, getSeverity, getBristol, normalizeItem } = require('./ontology');
+const time = require('../utils/time');
 
 // Legacy ontology for backward compatibility
 const INTENT_KEYWORDS = {
@@ -66,10 +68,9 @@ const INTENT_KEYWORDS = {
  * @returns {ParseResult}
  */
 function rulesParse(text, options = {}) {
-    const tz = options.tz || 'America/Los_Angeles';
-    const forcedIntent = options.forcedIntent || null;
-    const originalText = text.trim();
-    const t = originalText.toLowerCase();
+    const { tz, forcedIntent } = options;
+    const originalText = text;
+    let t = text.toLowerCase();
 
     const result = {
         intent: "other",
@@ -207,11 +208,16 @@ function rulesParse(text, options = {}) {
     }
 
     // ========== 3. TIME PARSING (Early - Affects Confidence) ==========
-    const timeInfo = parseTimeInfo(cleanedText, tz);
-    if (timeInfo.time) result.slots.time = timeInfo.time;
-    if (timeInfo.timestamp) result.slots.timestamp = timeInfo.timestamp;
-    if (timeInfo.meal_time) result.slots.meal_time = timeInfo.meal_time;
-    if (timeInfo.approx) result.slots.time_approx = timeInfo.approx;
+    const explicitTime = time.parse(t, tz);
+    if (explicitTime) {
+        result.slots.time = explicitTime.toISOString();
+        // A rough removal of the time phrase to help item extraction
+        // This is imperfect but good enough for many cases.
+        const timePhrase = t.match(/(\bat\s)?(\d{1,2}(:\d{2})?(\s?am|pm)?|yesterday|today|last night)/);
+        if (timePhrase) {
+            t = t.replace(timePhrase[0], '').trim();
+        }
+    }
 
     // ========== 4. LOGGABLE INTENTS (Priority Order) ==========
     // NOTE: BM detection handled by early route (step 0) - if we're here, it's not BM

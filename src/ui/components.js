@@ -49,35 +49,13 @@ function divider() {
  * Used when user reports vague symptom and we need clarification
  */
 function buttonsSymptomType() {
-    const row = new ActionRowBuilder()
+    return new ActionRowBuilder()
         .addComponents(
-            new ButtonBuilder()
-                .setCustomId(BUTTON_IDS.symptom.reflux)
-                .setLabel(BUTTON_LABELS.symptom.reflux)
-                .setStyle(ButtonStyle.Primary),
-            new ButtonBuilder()
-                .setCustomId(BUTTON_IDS.symptom.pain)
-                .setLabel(BUTTON_LABELS.symptom.pain)
-                .setStyle(ButtonStyle.Primary),
-            new ButtonBuilder()
-                .setCustomId(BUTTON_IDS.symptom.bloat)
-                .setLabel(BUTTON_LABELS.symptom.bloat)
-                .setStyle(ButtonStyle.Primary),
-            new ButtonBuilder()
-                .setCustomId(BUTTON_IDS.symptom.nausea)
-                .setLabel(BUTTON_LABELS.symptom.nausea)
-                .setStyle(ButtonStyle.Primary)
+            new ButtonBuilder().setCustomId(BUTTON_IDS.symptomReflux).setLabel('Reflux').setStyle(ButtonStyle.Primary),
+            new ButtonBuilder().setCustomId(BUTTON_IDS.symptomPain).setLabel('Pain').setStyle(ButtonStyle.Primary),
+            new ButtonBuilder().setCustomId(BUTTON_IDS.symptomBloat).setLabel('Bloating').setStyle(ButtonStyle.Primary),
+            new ButtonBuilder().setCustomId(BUTTON_IDS.symptomNausea).setLabel('Nausea').setStyle(ButtonStyle.Secondary),
         );
-
-    const row2 = new ActionRowBuilder()
-        .addComponents(
-            new ButtonBuilder()
-                .setCustomId(BUTTON_IDS.symptom.general)
-                .setLabel(BUTTON_LABELS.symptom.general)
-                .setStyle(ButtonStyle.Secondary)
-        );
-
-    return [row, row2];
 }
 
 /**
@@ -87,27 +65,13 @@ function buttonsSymptomType() {
  * Used when user logs food/drink without specifying when
  */
 function buttonsMealTime() {
-    const row = new ActionRowBuilder()
+    return new ActionRowBuilder()
         .addComponents(
-            new ButtonBuilder()
-                .setCustomId(BUTTON_IDS.meal.breakfast)
-                .setLabel(BUTTON_LABELS.meal.breakfast)
-                .setStyle(ButtonStyle.Primary),
-            new ButtonBuilder()
-                .setCustomId(BUTTON_IDS.meal.lunch)
-                .setLabel(BUTTON_LABELS.meal.lunch)
-                .setStyle(ButtonStyle.Primary),
-            new ButtonBuilder()
-                .setCustomId(BUTTON_IDS.meal.dinner)
-                .setLabel(BUTTON_LABELS.meal.dinner)
-                .setStyle(ButtonStyle.Primary),
-            new ButtonBuilder()
-                .setCustomId(BUTTON_IDS.meal.snack)
-                .setLabel(BUTTON_LABELS.meal.snack)
-                .setStyle(ButtonStyle.Secondary)
+            new ButtonBuilder().setCustomId(BUTTON_IDS.mealBreakfast).setLabel('Breakfast').setStyle(ButtonStyle.Primary),
+            new ButtonBuilder().setCustomId(BUTTON_IDS.mealLunch).setLabel('Lunch').setStyle(ButtonStyle.Primary),
+            new ButtonBuilder().setCustomId(BUTTON_IDS.mealDinner).setLabel('Dinner').setStyle(ButtonStyle.Primary),
+            new ButtonBuilder().setCustomId(BUTTON_IDS.mealSnack).setLabel('Snack').setStyle(ButtonStyle.Secondary),
         );
-
-    return [row];
 }
 
 /**
@@ -119,45 +83,18 @@ function buttonsMealTime() {
 function buttonsBristol() {
     const row1 = new ActionRowBuilder()
         .addComponents(
-            new ButtonBuilder()
-                .setCustomId(BUTTON_IDS.bristol[1])
-                .setLabel(BUTTON_LABELS.bristol[1])
-                .setStyle(ButtonStyle.Secondary),
-            new ButtonBuilder()
-                .setCustomId(BUTTON_IDS.bristol[2])
-                .setLabel(BUTTON_LABELS.bristol[2])
-                .setStyle(ButtonStyle.Secondary),
-            new ButtonBuilder()
-                .setCustomId(BUTTON_IDS.bristol[3])
-                .setLabel(BUTTON_LABELS.bristol[3])
-                .setStyle(ButtonStyle.Success)
+            new ButtonBuilder().setCustomId(BUTTON_IDS.bristol1).setLabel('1').setStyle(ButtonStyle.Secondary),
+            new ButtonBuilder().setCustomId(BUTTON_IDS.bristol2).setLabel('2').setStyle(ButtonStyle.Secondary),
+            new ButtonBuilder().setCustomId(BUTTON_IDS.bristol3).setLabel('3').setStyle(ButtonStyle.Primary),
+            new ButtonBuilder().setCustomId(BUTTON_IDS.bristol4).setLabel('4').setStyle(ButtonStyle.Success),
         );
-
     const row2 = new ActionRowBuilder()
         .addComponents(
-            new ButtonBuilder()
-                .setCustomId(BUTTON_IDS.bristol[4])
-                .setLabel(BUTTON_LABELS.bristol[4])
-                .setStyle(ButtonStyle.Success),
-            new ButtonBuilder()
-                .setCustomId(BUTTON_IDS.bristol[5])
-                .setLabel(BUTTON_LABELS.bristol[5])
-                .setStyle(ButtonStyle.Primary),
-            new ButtonBuilder()
-                .setCustomId(BUTTON_IDS.bristol[6])
-                .setLabel(BUTTON_LABELS.bristol[6])
-                .setStyle(ButtonStyle.Primary)
+            new ButtonBuilder().setCustomId(BUTTON_IDS.bristol5).setLabel('5').setStyle(ButtonStyle.Primary),
+            new ButtonBuilder().setCustomId(BUTTON_IDS.bristol6).setLabel('6').setStyle(ButtonStyle.Secondary),
+            new ButtonBuilder().setCustomId(BUTTON_IDS.bristol7).setLabel('7').setStyle(ButtonStyle.Secondary),
         );
-
-    const row3 = new ActionRowBuilder()
-        .addComponents(
-            new ButtonBuilder()
-                .setCustomId(BUTTON_IDS.bristol[7])
-                .setLabel(BUTTON_LABELS.bristol[7])
-                .setStyle(ButtonStyle.Danger)
-        );
-
-    return [row1, row2, row3];
+    return [row1, row2];
 }
 
 /**
@@ -169,52 +106,20 @@ function buttonsBristol() {
 function buttonsSeverity() {
     const row1 = new ActionRowBuilder()
         .addComponents(
-            new ButtonBuilder()
-                .setCustomId(BUTTON_IDS.severity[1])
-                .setLabel('1')
-                .setStyle(ButtonStyle.Success),
-            new ButtonBuilder()
-                .setCustomId(BUTTON_IDS.severity[2])
-                .setLabel('2')
-                .setStyle(ButtonStyle.Success),
-            new ButtonBuilder()
-                .setCustomId(BUTTON_IDS.severity[3])
-                .setLabel('3')
-                .setStyle(ButtonStyle.Success),
-            new ButtonBuilder()
-                .setCustomId(BUTTON_IDS.severity[4])
-                .setLabel('4')
-                .setStyle(ButtonStyle.Primary),
-            new ButtonBuilder()
-                .setCustomId(BUTTON_IDS.severity[5])
-                .setLabel('5')
-                .setStyle(ButtonStyle.Primary)
+            new ButtonBuilder().setCustomId(BUTTON_IDS.severity1).setLabel('1').setStyle(ButtonStyle.Secondary),
+            new ButtonBuilder().setCustomId(BUTTON_IDS.severity2).setLabel('2').setStyle(ButtonStyle.Secondary),
+            new ButtonBuilder().setCustomId(BUTTON_IDS.severity3).setLabel('3').setStyle(ButtonStyle.Success),
+            new ButtonBuilder().setCustomId(BUTTON_IDS.severity4).setLabel('4').setStyle(ButtonStyle.Success),
+            new ButtonBuilder().setCustomId(BUTTON_IDS.severity5).setLabel('5').setStyle(ButtonStyle.Success),
         );
-
     const row2 = new ActionRowBuilder()
         .addComponents(
-            new ButtonBuilder()
-                .setCustomId(BUTTON_IDS.severity[6])
-                .setLabel('6')
-                .setStyle(ButtonStyle.Primary),
-            new ButtonBuilder()
-                .setCustomId(BUTTON_IDS.severity[7])
-                .setLabel('7')
-                .setStyle(ButtonStyle.Primary),
-            new ButtonBuilder()
-                .setCustomId(BUTTON_IDS.severity[8])
-                .setLabel('8')
-                .setStyle(ButtonStyle.Danger),
-            new ButtonBuilder()
-                .setCustomId(BUTTON_IDS.severity[9])
-                .setLabel('9')
-                .setStyle(ButtonStyle.Danger),
-            new ButtonBuilder()
-                .setCustomId(BUTTON_IDS.severity[10])
-                .setLabel('10')
-                .setStyle(ButtonStyle.Danger)
+            new ButtonBuilder().setCustomId(BUTTON_IDS.severity6).setLabel('6').setStyle(ButtonStyle.Primary),
+            new ButtonBuilder().setCustomId(BUTTON_IDS.severity7).setLabel('7').setStyle(ButtonStyle.Primary),
+            new ButtonBuilder().setCustomId(BUTTON_IDS.severity8).setLabel('8').setStyle(ButtonStyle.Danger),
+            new ButtonBuilder().setCustomId(BUTTON_IDS.severity9).setLabel('9').setStyle(ButtonStyle.Danger),
+            new ButtonBuilder().setCustomId(BUTTON_IDS.severity10).setLabel('10').setStyle(ButtonStyle.Danger),
         );
-
     return [row1, row2];
 }
 
@@ -283,24 +188,12 @@ function buttonDismiss() {
  * Used when NLU confidence is low or intent is 'other'
  */
 function buttonsIntentClarification() {
-    const row = new ActionRowBuilder()
+    return new ActionRowBuilder()
         .addComponents(
-            new ButtonBuilder()
-                .setCustomId(BUTTON_IDS.intent.log_food)
-                .setLabel(BUTTON_LABELS.intent.log_food)
-                .setStyle(ButtonStyle.Primary)
-                .setEmoji(EMOJI.food),
-            new ButtonBuilder()
-                .setCustomId(BUTTON_IDS.intent.log_symptom)
-                .setLabel(BUTTON_LABELS.intent.log_symptom)
-                .setStyle(ButtonStyle.Primary)
-                .setEmoji(EMOJI.symptom),
-            new ButtonBuilder()
-                .setCustomId(BUTTON_IDS.intent.cancel)
-                .setLabel(BUTTON_LABELS.intent.cancel)
-                .setStyle(ButtonStyle.Secondary)
+            new ButtonBuilder().setCustomId(BUTTON_IDS.intentLogFood).setLabel('Log Food').setStyle(ButtonStyle.Success),
+            new ButtonBuilder().setCustomId(BUTTON_IDS.intentLogSymptom).setLabel('Log Symptom').setStyle(ButtonStyle.Primary),
+            new ButtonBuilder().setCustomId(BUTTON_IDS.intentCancel).setLabel('Cancel').setStyle(ButtonStyle.Secondary),
         );
-    return [row];
 }
 
 /**

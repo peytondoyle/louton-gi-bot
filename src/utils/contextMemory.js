@@ -7,6 +7,7 @@ const { UX } = require('../constants/ux');
 const fs = require('fs');
 const path = require('path');
 const moment = require('moment-timezone');
+const time = require('./time');
 
 // In-memory storage: userId -> { entries: [], warnings: Map, lexicon: Map, recentLogs: [] }
 const userContexts = new Map();
@@ -408,15 +409,15 @@ async function resolveReference(userId, text, googleSheets, sheetName) {
 
     try {
         // Get yesterday's date
-        const yesterday = moment().subtract(1, 'day').format('YYYY-MM-DD');
+        const yesterday = time.now().subtract(1, 'day').format('YYYY-MM-DD');
 
         // Fetch rows from sheet
         const result = await googleSheets.getRows({}, sheetName);
         if (!result.success) return null;
 
         // Find yesterday's breakfast/lunch/dinner (based on current time)
-        const currentMeal = moment().hour() < 11 ? 'breakfast' :
-                           moment().hour() < 15 ? 'lunch' : 'dinner';
+        const currentMeal = time.now().hour() < 11 ? 'breakfast' :
+                           time.now().hour() < 15 ? 'lunch' : 'dinner';
 
         const yesterdayEntry = result.rows.find(row => {
             if (row.Date !== yesterday) return false;

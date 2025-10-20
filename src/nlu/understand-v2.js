@@ -11,6 +11,8 @@
 
 const { rulesParse, calculateComplexity } = require('./rules-v2');
 const { CONFIDENCE_THRESHOLDS, isMinimalCoreFood } = require('./ontology-v2');
+const { llmPinch } = require('./llmPinch');
+const { record } = require('./metrics-v2');
 
 // Metrics tracking
 let metrics = {
@@ -23,19 +25,18 @@ let metrics = {
 };
 
 /**
- * Understand user input with V2 enhancements
- * @param {string} text - User input
- * @param {Object} options - { userId, tz }
- * @param {Object} contextMemory - Context memory service (optional)
- * @returns {Promise<Object>} - Parse result
+ * Main NLU entry point
+ * @param {string} text - The user's message
+ * @param {Object} options - { userId, tz, forcedIntent }
+ * @param {Object} contextMemory - The user's context memory
+ * @returns {Promise<Object>} The final parse result
  */
-async function understand(text, options = {}, contextMemory = null) {
-    metrics.total++;
+async function understand(text, options = {}, contextMemory) {
+    const { userId, tz = 'America/Los_Angeles', forcedIntent } = options;
+    const startTime = Date.now();
 
-    const tz = options.tz || 'America/Los_Angeles';
-
-    // Run rules-based parser V2
-    const rulesResult = rulesParse(text, { tz, forcedIntent: options.forcedIntent });
+    // 1. Rules-based parse (always runs)
+    const rulesResult = rulesParse(text, { tz, forcedIntent });
 
     // Verify V2 is active
     if (metrics.total === 1) {
@@ -101,7 +102,6 @@ async function understand(text, options = {}, contextMemory = null) {
         console.log(`[NLU-V2] High complexity (${complexity}) or low confidence. Attempting LLM pinch...`);
 
         try {
-            const { llmPinch } = require('./llmPinch');
             const llmActions = await llmPinch(text); // Expects an array of actions
 
             if (llmActions && llmActions.length > 0) {

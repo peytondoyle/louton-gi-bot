@@ -47,7 +47,8 @@ const symptomLogDialog = {
      * @param {string} text - The user's message content.
      */
     async parseResponse(state, text) {
-        const result = await understand(text, { forcedIntent: 'symptom' });
+        const { tz, userId } = state.context;
+        const result = await understand(text, { userId, tz, forcedIntent: 'symptom' });
 
         if (result.intent === 'symptom' || result.intent === 'reflux') {
             if (result.slots.symptom_type && !state.context.symptom_type) {

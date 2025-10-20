@@ -1,8 +1,15 @@
 const symptomLogDialog = require('./symptomLogDialog');
+const db = require('../../services/sqliteBridge');
 
-// This will hold the state of all active conversations.
-// In a larger bot, this might be moved to a persistent store like Redis.
-const activeDialogs = new Map(); // userId -> DialogState
+// This module no longer holds state. It is now a stateless controller
+// that uses the database as its source of truth.
+
+/**
+ * Generates a unique key for storing a user's dialog state.
+ * @param {string} userId - The Discord user ID.
+ * @returns {string}
+ */
+const getKey = (userId) => `dialog:${userId}`;
 
 /**
  * @typedef {Object} DialogState
@@ -24,12 +31,8 @@ const DialogManager = {
      * @returns {boolean}
      */
     hasActiveDialog(userId) {
-        const dialog = activeDialogs.get(userId);
-        if (dialog && Date.now() > dialog.expiresAt) {
-            activeDialogs.delete(userId);
-            return false;
-        }
-        return !!dialog;
+        // The get function in sqliteBridge automatically handles expiry.
+        return !!db.get(getKey(userId));
     },
 
     /**
@@ -51,10 +54,11 @@ const DialogManager = {
             currentDialog: dialogName,
             step: 0,
             context: { ...initialContext, userId },
-            expiresAt: Date.now() + 10 * 60 * 1000, // Dialog expires in 10 minutes
         };
 
-        activeDialogs.set(userId, state);
+        // Store the new state in the database with a 10-minute TTL
+        db.set(getKey(userId), state, 600);
+
         console.log(`[DIALOG] Starting dialog '${dialogName}' for user ${userId}`);
 
         // Execute the first step of the dialog
@@ -67,27 +71,27 @@ const DialogManager = {
      */
     async handleResponse(message) {
         const userId = message.author.id;
-        const state = activeDialogs.get(userId);
+        const state = db.get(getKey(userId));
 
         if (!state) return;
 
         const script = DIALOG_SCRIPTS[state.currentDialog];
         if (!script) {
             console.error(`[DIALOG] No script found for active dialog: ${state.currentDialog}`);
-            activeDialogs.delete(userId);
+            db.del(getKey(userId));
             return;
         }
 
         // Pass the current state and message to the script to handle
         const result = await script.handleStep(state, message);
 
-        // Update the state with the result from the script
-        activeDialogs.set(userId, result.newState);
-
-        // If the dialog is complete, remove it from the active list
+        // If the dialog is complete, remove it from the database
         if (result.isComplete) {
             console.log(`[DIALOG] Dialog '${state.currentDialog}' completed for user ${userId}`);
-            activeDialogs.delete(userId);
+            db.del(getKey(userId));
+        } else {
+            // Otherwise, update the state in the database
+            db.set(getKey(userId), result.newState, 600);
         }
     },
 
@@ -96,10 +100,8 @@ const DialogManager = {
      * @param {string} userId - The Discord user ID.
      */
     endDialog(userId) {
-        if (activeDialogs.has(userId)) {
-            activeDialogs.delete(userId);
-            console.log(`[DIALOG] Manually ended dialog for user ${userId}`);
-        }
+        db.del(getKey(userId));
+        console.log(`[DIALOG] Manually ended dialog for user ${userId}`);
     }
 };
 

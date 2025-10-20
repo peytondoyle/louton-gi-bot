@@ -1,0 +1,73 @@
+[
+    {
+        "description": "Simple food log",
+        "input": "I had a salad for lunch",
+        "expected": {
+            "intent": "food",
+            "slots": {
+                "item": "salad",
+                "meal_time": "lunch"
+            }
+        }
+    },
+    {
+        "description": "Food log with sides",
+        "input": "Breakfast was oatmeal with berries and nuts",
+        "expected": {
+            "intent": "food",
+            "slots": {
+                "item": "oatmeal",
+                "sides": "berries and nuts",
+                "meal_time": "breakfast"
+            }
+        }
+    },
+    {
+        "description": "Simple symptom log with severity",
+        "input": "I have a mild headache",
+        "expected": {
+            "intent": "symptom",
+            "slots": {
+                "symptom_type": "headache",
+                "severity": 3
+            }
+        }
+    },
+    {
+        "description": "Reflux log with numeric severity",
+        "input": "bad reflux, maybe a 7/10",
+        "expected": {
+            "intent": "reflux",
+            "slots": {
+                "severity": 7
+            }
+        }
+    },
+    {
+        "description": "BM log with Bristol scale",
+        "input": "log a bm, bristol 4",
+        "expected": {
+            "intent": "bm",
+            "slots": {
+                "bristol": 4
+            }
+        }
+    },
+    {
+        "description": "Question about data",
+        "input": "how many times did I have coffee last week?",
+        "expected": {
+            "intent": "question",
+            "slots": {
+                "query": "how many times did I have coffee last week?"
+            }
+        }
+    },
+    {
+        "description": "Settings-related query",
+        "input": "turn on my reminders",
+        "expected": {
+            "intent": "settings"
+        }
+    }
+]

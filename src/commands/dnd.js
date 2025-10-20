@@ -4,6 +4,8 @@
  */
 
 const moment = require('moment-timezone');
+const { isValid, find } = require('moment-timezone');
+const time = require('../utils/time');
 const { computeNextSend } = require('../reminders/adaptive');
 
 /**
@@ -74,24 +76,26 @@ async function handleTimezone(message, args, deps) {
     const profile = await getUserProfile(userId, googleSheets);
     const currentTz = profile.prefs.TZ || 'America/Los_Angeles';
 
-    if (!args) {
-        const prefs = await getUserPrefs(userId, googleSheets);
-        return message.reply(`Your current timezone is **${prefs.TZ}**.\n\nTo change: \`!timezone America/New_York\``);
+    const tz = (args || '').trim();
+
+    if (!tz) {
+        return message.reply(`Your current timezone is set to \`${currentTz}\`.`);
     }
 
-    const tz = args.trim();
-
-    // Validate timezone
-    if (!moment.tz.zone(tz)) {
-        return message.reply(`❌ Invalid timezone "${tz}".\n\nExamples: America/New_York, America/Los_Angeles, Europe/London`);
+    if (!isValid(tz)) {
+        const guess = find(tz);
+        if (guess && guess.length > 0) {
+            return message.reply(`Did you mean \`${guess[0]}\`? Please use a valid IANA timezone name.`);
+        }
+        return message.reply('Invalid timezone. Please use a valid IANA timezone name (e.g., `America/New_York`).');
     }
 
     await message.reply(`✅ Timezone set to **${tz}**.`);
     profile.prefs.TZ = tz;
     await updateUserProfile(userId, profile, googleSheets);
 
-    const currentTime = moment().tz(tz).format('HH:mm');
-    await message.reply(`✅ Timezone set to **${tz}**\n\nYour local time is now: ${currentTime}`);
+    const currentTime = time.now(tz).format('HH:mm');
+    await message.channel.send(`(Your local time is now approx. ${currentTime})`);
 
     console.log(`[TZ] User ${userId} set timezone: ${tz}`);
 }
@@ -107,32 +111,23 @@ async function handleSnooze(message, args, deps) {
     const userId = message.author.id;
     const profile = await getUserProfile(userId, googleSheets);
     const tz = profile.prefs.TZ || 'America/Los_Angeles';
-    const now = moment().tz(tz);
+    const now = time.now(tz);
 
-    if (!args) {
+    if (!args || args.trim() === '') {
         return message.reply('Usage: `!snooze 1h` or `!snooze 3h` or `!snooze 1d`');
     }
 
-    const trimmed = args.trim().toLowerCase();
-
-    // Parse duration
-    const durationPattern = /^(\d+)(h|d)$/;
-    const match = trimmed.match(durationPattern);
-
-    if (!match) {
-        return message.reply('❌ Invalid format. Use `!snooze 1h`, `!snooze 3h`, or `!snooze 1d`');
-    }
-
-    const [_, amount, unit] = match;
-    const value = parseInt(amount, 10);
-
+    const duration = args.toLowerCase().trim();
     let snoozeUntil;
-    if (unit === 'h') {
-        snoozeUntil = moment().tz(tz).add(value, 'hours');
-    } else if (unit === 'd') {
-        snoozeUntil = moment().tz(tz).add(value, 'days');
+
+    if (duration.endsWith('h')) {
+        const value = parseInt(duration, 10);
+        snoozeUntil = time.now(tz).add(value, 'hours');
+    } else if (duration.endsWith('d')) {
+        const value = parseInt(duration, 10);
+        snoozeUntil = time.now(tz).add(value, 'days');
     } else {
-        return message.reply('❌ Unit must be h (hours) or d (days)');
+        return message.reply('Invalid duration. Use `1h`, `3h`, `1d`, etc.');
     }
 
     await message.reply(`Okay, snoozing reminders until **${snoozeUntil.tz(tz).format('ddd, h:mm a')}**.`);

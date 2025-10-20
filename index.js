@@ -8,7 +8,7 @@ if (process.env.REPL_ID && !require('fs').existsSync('credentials.json')) {
 
 const { Client, GatewayIntentBits, EmbedBuilder, Partials, ActionRowBuilder, ButtonBuilder, ButtonStyle } = require('discord.js');
 const cron = require('node-cron');
-const moment = require('moment-timezone');
+const time = require('./src/utils/time');
 const googleSheets = require('./services/googleSheets');
 const analyzer = require('./utils/analyzer');
 const NLPHandler = require('./utils/nlpHandler');
@@ -160,11 +160,7 @@ client.on('raw', (packet) => {
 
 // Bot ready event
 client.once('ready', async () => {
-    const timestamp = new Date().toLocaleString('en-US', {
-        timeZone: TIMEZONE,
-        dateStyle: 'medium',
-        timeStyle: 'medium'
-    });
+    const timestamp = time.now(TIMEZONE).format('YYYY-MM-DD HH:mm:ss');
 
     console.log(`✅ Louton GI Bot is online as ${client.user.tag}`);
     console.log(`🕐 Bot ready at: ${timestamp}`);
@@ -292,52 +288,22 @@ async function handleNaturalLanguage(message) {
     }
 
     // ========== CONTEXTUAL FOLLOW-UP ==========
-    const pendingContext = contextMemory.getPendingContext(userId);
-    if (pendingContext && pendingContext.type === 'expecting_symptom_follow_up') {
-        // Assume this message is the follow-up symptom
-        const result = await understand(text, { userId, tz: TIMEZONE, forcedIntent: 'symptom' });
-        if (result.intent === 'symptom' || result.intent === 'reflux') {
-            result.slots.linked_item = pendingContext.data.linkedItem;
-            console.log(`[Context] Follow-up symptom detected, linking to: ${pendingContext.data.linkedItem}`);
-            await logFromNLU(message, result);
-            return; // End processing for this follow-up
-        }
-    }
-
-    // ========== DEDUPLICATION ==========
-    // Ignore duplicate messages from same user within 2-second window
-    if (isDuplicate(userId, text, message.createdTimestamp)) {
-        console.log(`[ROUTER] ⏭️  Skipping duplicate message from ${userTag}: "${text}"`);
-        return;
-    }
-
-    // ========== PENDING UX INTERACTIONS ==========
-    // Check if user is responding to a pending UX action (photo, custom portion, custom brand)
-    const uxDeps = { googleSheets, getLogSheetNameForUser: googleSheets.getLogSheetNameForUser };
-
-    // Handle photo attachments
-    if (message.attachments.size > 0) {
-        const handled = await uxButtons.handlePhotoMessage(message, uxDeps);
-        if (handled) return;
-    }
-
-    // Handle custom text input for portion/brand
-    const customHandled = await uxButtons.handleCustomInput(message, uxDeps);
-    if (customHandled) return;
-
-    // Check for correction syntax first
-    if (text.toLowerCase().startsWith('correction:') || text.startsWith('*')) {
-        await handleCorrection(message, text);
-        return;
-    }
-
-    // Track if save succeeded (to prevent false error messages)
-    let saveSucceeded = false;
-
     try {
         // Parse intent and slots with V2
         const profile = await getUserProfile(userId, googleSheets);
-        const tz = profile.prefs.TZ || TIMEZONE;
+        const tz = profile.prefs.TZ; // Get TZ from profile
+
+        // CONTEXTUAL FOLLOW-UP needs the timezone
+        const pendingContext = contextMemory.getPendingContext(userId);
+        if (pendingContext && pendingContext.type === 'expecting_symptom_follow_up') {
+            const result = await understand(text, { userId, tz, forcedIntent: 'symptom' });
+            if (result.intent === 'symptom' || result.intent === 'reflux') {
+                result.slots.linked_item = pendingContext.data.linkedItem;
+                console.log(`[Context] Follow-up symptom detected, linking to: ${pendingContext.data.linkedItem}`);
+                await logFromNLU(message, result);
+                return; // End processing for this follow-up
+            }
+        }
 
         const understandOptions = { userId, tz };
         if (message.forcedIntent) {
@@ -402,7 +368,8 @@ async function handleNaturalLanguage(message) {
             if (result.intent !== 'question') {
                 // This is a potential trigger for a dialog if the intent is 'other' or low-confidence symptom
                 if (result.intent === 'symptom' && result.missing.length > 0) {
-                    await DialogManager.startDialog('symptom_log', message, result.slots);
+                    const initialContext = { ...result.slots, tz }; // Pass timezone into the dialog
+                    await DialogManager.startDialog('symptom_log', message, initialContext);
                     return;
                 }
                 await requestIntentClarification(message);

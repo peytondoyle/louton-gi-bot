@@ -1,5 +1,6 @@
 const { google } = require('googleapis');
-const moment = require('moment-timezone');
+const time = require('../src/utils/time');
+const { a1, getSheet, batchUpdate } = require('./googleBase');
 
 class GoogleSheetsService {
     constructor() {
@@ -220,7 +221,7 @@ class GoogleSheetsService {
     determineMealType(notes, timestamp) {
         if (!notes) {
             // Determine by time if no notes
-            const hour = moment(timestamp).hour();
+            const hour = time.moment(timestamp).hour();
             if (hour >= 5 && hour < 11) return 'Breakfast';
             if (hour >= 11 && hour < 15) return 'Lunch';
             if (hour >= 17 && hour < 22) return 'Dinner';
@@ -240,8 +241,8 @@ class GoogleSheetsService {
         if (!this.initialized) await this.initialize();
 
         try {
-            const timestamp = entry.timestamp || moment().tz(process.env.TIMEZONE || 'America/Los_Angeles').format('YYYY-MM-DD HH:mm:ss');
-            const date = moment(timestamp).format('YYYY-MM-DD');
+            const timestamp = entry.timestamp || time.moment().tz(process.env.TIMEZONE || 'America/Los_Angeles').format('YYYY-MM-DD HH:mm:ss');
+            const date = time.moment(timestamp).format('YYYY-MM-DD');
 
             // Auto-categorize if not provided
             const category = entry.category || this.autoCategorize(entry.type, entry.value || entry.details);
@@ -358,16 +359,16 @@ class GoogleSheetsService {
             }
 
             if (filter.date) {
-                const filterDate = moment(filter.date).format('YYYY-MM-DD');
-                filteredRows = filteredRows.filter(row => row.date === filterDate);
+                const filterDate = time.format(filter.date, 'YYYY-MM-DD');
+                filteredRows = filteredRows.filter(row => row.Date === filterDate);
             }
 
             if (filter.startDate && filter.endDate) {
-                const start = moment(filter.startDate);
-                const end = moment(filter.endDate);
+                const start = time.moment(filter.startDate);
+                const end = time.moment(filter.endDate);
                 filteredRows = filteredRows.filter(row => {
-                    const rowDate = moment(row.timestamp);
-                    return rowDate.isBetween(start, end, null, '[]');
+                    const rowDate = time.moment(row.Timestamp);
+                    return rowDate.isBetween(start, end, 'day', '[]'); // inclusive
                 });
             }
 
@@ -383,7 +384,7 @@ class GoogleSheetsService {
     }
 
     async getTodayEntries(userName = null, sheetName = null) {
-        const today = moment().tz(process.env.TIMEZONE || 'America/Los_Angeles').startOf('day');
+        const today = time.moment().tz(process.env.TIMEZONE || 'America/Los_Angeles').startOf('day');
         const filter = {
             date: today.format('YYYY-MM-DD')
         };
@@ -394,8 +395,8 @@ class GoogleSheetsService {
     }
 
     async getWeekEntries(userName = null, sheetName = null) {
-        const weekStart = moment().tz(process.env.TIMEZONE || 'America/Los_Angeles').startOf('week');
-        const weekEnd = moment().tz(process.env.TIMEZONE || 'America/Los_Angeles').endOf('week');
+        const weekStart = time.moment().tz(process.env.TIMEZONE || 'America/Los_Angeles').startOf('week');
+        const weekEnd = time.moment().tz(process.env.TIMEZONE || 'America/Los_Angeles').endOf('week');
 
         const filter = {
             startDate: weekStart,
@@ -415,8 +416,8 @@ class GoogleSheetsService {
 
     async getEntriesDateRange(startDate, endDate, userName = null, sheetName = null) {
         const filter = {
-            startDate: moment(startDate),
-            endDate: moment(endDate)
+            startDate: time.moment(startDate),
+            endDate: time.moment(endDate)
         };
 
         if (userName) filter.user = userName;
@@ -674,135 +675,47 @@ class GoogleSheetsService {
      * @param {string} sheetName - Name of the sheet
      * @param {Array<string>} headersArray - Required headers
      */
-    async ensureSheetAndHeaders(sheetName, headersArray) {
-        if (!this.initialized) await this.initialize();
+    async ensureSheetAndHeaders(sheetTitle, requiredHeaders) {
+        await this.initialize();
+        const sheet = await this._getSheet(sheetTitle);
 
-        try {
-            // Check if sheet exists
-            const response = await this.sheets.spreadsheets.get({
-                spreadsheetId: this.spreadsheetId
-            });
-
-            const sheetExists = response.data.sheets.some(
-                sheet => sheet.properties.title === sheetName
-            );
-
-            if (!sheetExists) {
-                // Create the sheet
-                await this.sheets.spreadsheets.batchUpdate({
-                    spreadsheetId: this.spreadsheetId,
-                    resource: {
-                        requests: [{
-                            addSheet: {
-                                properties: {
-                                    title: sheetName,
-                                    gridProperties: {
-                                        rowCount: 10000,
-                                        columnCount: headersArray.length
-                                    }
-                                }
-                            }
-                        }]
-                    }
-                });
-                console.log(`✅ Created new sheet: ${sheetName}`);
-            }
-
-            // Check if headers exist and add missing columns
-            const lastCol = String.fromCharCode(65 + headersArray.length - 1);
-            const headerRange = `${sheetName}!A1:${lastCol}1`;
-            const headerResponse = await this.sheets.spreadsheets.values.get({
+        if (!sheet) {
+            console.log(`[G-SHEETS] Creating sheet: ${sheetTitle}`);
+            await this.sheets.spreadsheets.batchUpdate({
                 spreadsheetId: this.spreadsheetId,
-                range: headerRange
+                resource: {
+                    requests: [{ addSheet: { properties: { title: sheetTitle } } }],
+                },
             });
+            // Set the headers in the new sheet
+            await this.sheets.spreadsheets.values.update({
+                spreadsheetId: this.spreadsheetId,
+                range: `${sheetTitle}!A1`,
+                valueInputOption: 'USER_ENTERED',
+                resource: { values: [requiredHeaders] },
+            });
+            console.log(`[G-SHEETS] Set headers for new sheet: ${sheetTitle}`);
+            return;
+        }
 
-            const existingHeaders = headerResponse.data.values ? headerResponse.data.values[0] : [];
+        // --- Schema Update Logic ---
+        // Get current headers
+        const headerResponse = await this.sheets.spreadsheets.values.get({
+            spreadsheetId: this.spreadsheetId,
+            range: `${sheetTitle}!1:1`,
+        });
 
-            // Determine if we need to add headers
-            if (existingHeaders.length === 0) {
-                // No headers - add them
-                await this.sheets.spreadsheets.values.update({
-                    spreadsheetId: this.spreadsheetId,
-                    range: headerRange,
-                    valueInputOption: 'RAW',
-                    resource: { values: [headersArray] }
-                });
-                console.log(`✅ Headers added to ${sheetName}: ${headersArray.join(', ')}`);
+        const currentHeaders = headerResponse.data.values ? headerResponse.data.values[0] : [];
+        const missingHeaders = requiredHeaders.filter(h => !currentHeaders.includes(h));
 
-                // Format headers (bold and frozen) and clear data row formatting
-                const sheetId = await this.getSheetIdByName(sheetName);
-                await this.sheets.spreadsheets.batchUpdate({
-                    spreadsheetId: this.spreadsheetId,
-                    resource: {
-                        requests: [
-                            {
-                                repeatCell: {
-                                    range: {
-                                        sheetId: sheetId,
-                                        startRowIndex: 0,
-                                        endRowIndex: 1
-                                    },
-                                    cell: {
-                                        userEnteredFormat: {
-                                            textFormat: { bold: true },
-                                            backgroundColor: { red: 0.9, green: 0.9, blue: 0.9 }
-                                        }
-                                    },
-                                    fields: 'userEnteredFormat(textFormat,backgroundColor)'
-                                }
-                            },
-                            {
-                                repeatCell: {
-                                    range: {
-                                        sheetId: sheetId,
-                                        startRowIndex: 1,
-                                        endRowIndex: 10000
-                                    },
-                                    cell: {
-                                        userEnteredFormat: {
-                                            backgroundColor: { red: 1, green: 1, blue: 1 }
-                                        }
-                                    },
-                                    fields: 'userEnteredFormat(backgroundColor)'
-                                }
-                            },
-                            {
-                                updateSheetProperties: {
-                                    properties: {
-                                        sheetId: sheetId,
-                                        gridProperties: { frozenRowCount: 1 }
-                                    },
-                                    fields: 'gridProperties.frozenRowCount'
-                                }
-                            }
-                        ]
-                    }
-                });
-            } else {
-                // Headers exist - check for missing columns
-                const missingHeaders = headersArray.filter(h => !existingHeaders.includes(h));
-
-                if (missingHeaders.length > 0) {
-                    // Add missing headers at the end
-                    const newHeaders = [...existingHeaders, ...missingHeaders];
-                    const newLastCol = String.fromCharCode(65 + newHeaders.length - 1);
-
-                    await this.sheets.spreadsheets.values.update({
-                        spreadsheetId: this.spreadsheetId,
-                        range: `${sheetName}!A1:${newLastCol}1`,
-                        valueInputOption: 'RAW',
-                        resource: { values: [newHeaders] }
-                    });
-                    console.log(`✅ Added missing columns to ${sheetName}: ${missingHeaders.join(', ')}`);
-                }
-            }
-
-            // Cache the headers
-            this.headerCache.set(sheetName, headersArray);
-
-        } catch (error) {
-            console.error(`Error ensuring sheet ${sheetName}:`, error);
-            throw error;
+        if (missingHeaders.length > 0) {
+            console.log(`[G-SHEETS] Updating schema for '${sheetTitle}'. Missing: ${missingHeaders.join(', ')}`);
+            await this.sheets.spreadsheets.values.append({
+                spreadsheetId: this.spreadsheetId,
+                range: `${sheetTitle}!${a1.fromColumnIndex(currentHeaders.length)}1`,
+                valueInputOption: 'USER_ENTERED',
+                resource: { values: [missingHeaders] },
+            });
         }
     }
 

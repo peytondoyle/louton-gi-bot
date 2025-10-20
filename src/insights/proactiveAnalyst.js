@@ -1,4 +1,4 @@
-const moment = require('moment-timezone');
+const time = require('../utils/time');
 
 const ProactiveAnalyst = {
     /**
@@ -31,13 +31,13 @@ const ProactiveAnalyst = {
 
         // 2. For each symptom, look for preceding foods within a time window.
         for (const symptom of symptoms) {
-            const symptomTime = moment(symptom.Timestamp).tz(tz);
+            const symptomTime = time.moment(symptom.Timestamp).tz(tz);
             const symptomType = symptom.Details.toLowerCase().trim();
 
             const windowStart = symptomTime.clone().subtract(4, 'hours');
 
             const precedingFoods = foods.filter(food => {
-                const foodTime = moment(food.Timestamp).tz(tz);
+                const foodTime = time.moment(food.Timestamp).tz(tz);
                 return foodTime.isBetween(windowStart, symptomTime);
             });
 

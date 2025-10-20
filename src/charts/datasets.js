@@ -6,6 +6,8 @@
 
 const moment = require('moment-timezone');
 const { parseNotes } = require('../utils/notes');
+const { google } = require('googleapis');
+const time = require('../utils/time');
 
 // In-memory cache (5-min TTL)
 const cache = new Map();
@@ -72,7 +74,7 @@ async function loadIntakeBurnSeries({ googleSheets, userId, sheetName, healthShe
         // Build date range
         const dates = [];
         for (let i = days - 1; i >= 0; i--) {
-            dates.push(moment().tz(tz).subtract(i, 'days').format('YYYY-MM-DD'));
+            dates.push(time.now(tz).subtract(i, 'days').format('YYYY-MM-DD'));
         }
 
         // Aggregate by date
@@ -112,7 +114,7 @@ async function loadIntakeBurnSeries({ googleSheets, userId, sheetName, healthShe
         }
 
         // Format labels
-        const labels = dates.map(d => moment(d).format('MMM D'));
+        const labels = dates.map(d => time.moment(d).format('MMM D'));
 
         const result = { labels, intake, burn };
         setCache(cacheKey, result);
@@ -143,7 +145,7 @@ async function loadRefluxSeveritySeries({ googleSheets, userId, sheetName, tz = 
         // Build date range
         const dates = [];
         for (let i = days - 1; i >= 0; i--) {
-            dates.push(moment().tz(tz).subtract(i, 'days').format('YYYY-MM-DD'));
+            dates.push(time.now(tz).subtract(i, 'days').format('YYYY-MM-DD'));
         }
 
         // Aggregate reflux by date
@@ -203,7 +205,7 @@ async function loadRefluxSeveritySeries({ googleSheets, userId, sheetName, tz = 
             }
         }
 
-        const labels = dates.map(d => moment(d).format('MMM D'));
+        const labels = dates.map(d => time.moment(d).format('MMM D'));
 
         const chartData = { labels, count, avgSeverity, ma7 };
         setCache(cacheKey, chartData);
@@ -232,7 +234,7 @@ async function loadLatencySamples({ googleSheets, userId, sheetName, tz = 'Ameri
         }
 
         // Filter to date range and sort by timestamp
-        const cutoff = moment().tz(tz).subtract(days, 'days').format('YYYY-MM-DD');
+        const cutoff = time.now(tz).subtract(days, 'days').format('YYYY-MM-DD');
         const rows = result.rows
             .filter(row => {
                 if (row.Date < cutoff) return false;
@@ -294,7 +296,7 @@ async function loadTriggerLiftBars({ googleSheets, userId, sheetName, tz = 'Amer
         }
 
         // Filter and sort
-        const cutoff = moment().tz(tz).subtract(days, 'days').format('YYYY-MM-DD');
+        const cutoff = time.now(tz).subtract(days, 'days').format('YYYY-MM-DD');
         const rows = result.rows
             .filter(row => {
                 if (row.Date < cutoff) return false;

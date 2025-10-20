@@ -4,6 +4,7 @@
  */
 
 const moment = require('moment-timezone');
+const time = require('../utils/time');
 
 const MAX_ADAPTIVE_SHIFT_MIN = 120; // Max 2 hours
 const IGNORED_THRESHOLD = 3; // Nudges after 3 consecutive ignores
@@ -61,26 +62,16 @@ function inQuietHours({ dndWindow, nowZoned }) {
 
 /**
  * Compute next send time with adaptive shift
- * @param {string} baseHHmm - Base time in HH:mm format
+ * @param {string} baseHHMM - Base time in HH:mm format
  * @param {Object} options - { tz, adaptiveShiftMin }
  * @returns {string} - Adjusted time in HH:mm format
  */
-function computeNextSend(baseHHmm, { tz, adaptiveShiftMin = 0 }) {
-    if (!baseHHmm) return '';
-
-    const [h, m] = baseHHmm.split(':').map(n => parseInt(n, 10));
-    if (isNaN(h) || isNaN(m)) return baseHHmm;
-
-    // Apply shift (bounded to ±90 min for safety)
-    const boundedShift = Math.max(-90, Math.min(90, adaptiveShiftMin));
-
+function computeNextSend(baseHHMM, adaptiveShiftMin, tz) {
+    const [h, m] = baseHHMM.split(':').map(Number);
     // Create moment object for today at base time
-    const base = moment().tz(tz).hour(h).minute(m).second(0);
-
-    // Add shift
-    const adjusted = base.add(boundedShift, 'minutes');
-
-    return adjusted.format('HH:mm');
+    const base = time.now(tz).hour(h).minute(m).second(0);
+    const nextSend = base.clone().add(adaptiveShiftMin, 'minutes');
+    return nextSend.toISOString();
 }
 
 /**

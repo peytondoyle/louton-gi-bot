@@ -6,8 +6,9 @@
 const { EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle } = require('discord.js');
 const { shouldSuppressNow } = require('../reminders/adaptive');
 const { parseNotes } = require('../utils/notes');
-const { setCooldown, isOnCooldown } = require('../../services/prefs');
-const moment = require('moment-timezone');
+const { setCooldown, isOnCooldown } = require('../../services/userProfile'); // Note: These functions will be moved to userProfile
+const { EMOJI } = require('../constants/ux');
+const time = require('../utils/time');
 
 // In-memory tracking of pending follow-ups
 const pendingFollowups = new Map();
@@ -18,6 +19,7 @@ const pendingFollowups = new Map();
  */
 async function scheduleContextualFollowups({ googleSheets, message, parseResult, tz, userId, userPrefs }) {
     const { intent, slots } = parseResult;
+    const nowISO = time.now(tz).toISOString();
 
     // Severe symptom → hydration check
     if ((intent === 'symptom' || intent === 'reflux') && slots.severity && parseInt(slots.severity, 10) >= 7) {
@@ -39,7 +41,7 @@ async function scheduleContextualFollowups({ googleSheets, message, parseResult,
  * Schedule hydration check after severe symptom
  */
 async function scheduleHydrationCheck({ googleSheets, message, tz, userId, userPrefs }) {
-    const nowISO = moment().tz(tz).toISOString();
+    const nowISO = time.now(tz).toISOString();
 
     // Check cooldown (6h)
     if (await isOnCooldown(userId, 'hydrate_hint', nowISO, googleSheets)) {
@@ -52,7 +54,7 @@ async function scheduleHydrationCheck({ googleSheets, message, tz, userId, userP
 
     setTimeout(async () => {
         // Re-check suppression at send time
-        const sendTime = moment().tz(tz);
+        const sendTime = time.now(tz);
         if (shouldSuppressNow({ userPrefs, nowZoned: sendTime })) {
             console.log(`[FOLLOWUP] Hydration hint suppressed by DND/snooze for user ${userId}`);
             return;
@@ -84,7 +86,7 @@ async function scheduleHydrationCheck({ googleSheets, message, tz, userId, userP
             await message.author.send({ embeds: [embed], components: [row] });
 
             // Set 6h cooldown
-            const cooldownUntil = moment().tz(tz).add(6, 'hours').toISOString();
+            const cooldownUntil = time.now(tz).add(6, 'hours').toISOString();
             await setCooldown(userId, 'hydrate_hint', cooldownUntil, googleSheets);
 
             console.log(`[FOLLOWUP] Sent hydration hint to user ${userId}`);
@@ -98,7 +100,7 @@ async function scheduleHydrationCheck({ googleSheets, message, tz, userId, userP
  * Schedule general symptom follow-up
  */
 async function scheduleSymptomFollowup({ googleSheets, message, tz, userId, userPrefs }) {
-    const nowISO = moment().tz(tz).toISOString();
+    const nowISO = time.now(tz).toISOString();
 
     // Check cooldown (6h)
     if (await isOnCooldown(userId, 'context_followup', nowISO, googleSheets)) {
@@ -116,7 +118,7 @@ async function scheduleSymptomFollowup({ googleSheets, message, tz, userId, user
 
     const timeoutId = setTimeout(async () => {
         // Re-check suppression
-        const sendTime = moment().tz(tz);
+        const sendTime = time.now(tz);
         if (shouldSuppressNow({ userPrefs, nowZoned: sendTime })) {
             console.log(`[FOLLOWUP] Context follow-up suppressed by DND/snooze for user ${userId}`);
             return;
@@ -150,7 +152,7 @@ async function scheduleSymptomFollowup({ googleSheets, message, tz, userId, user
             await message.author.send({ embeds: [embed], components: [row] });
 
             // Set 6h cooldown
-            const cooldownUntil = moment().tz(tz).add(6, 'hours').toISOString();
+            const cooldownUntil = time.now(tz).add(6, 'hours').toISOString();
             await setCooldown(userId, 'context_followup', cooldownUntil, googleSheets);
 
             console.log(`[FOLLOWUP] Sent context follow-up to user ${userId}`);
@@ -168,7 +170,7 @@ async function scheduleSymptomFollowup({ googleSheets, message, tz, userId, user
  * Schedule caffeine safety hint
  */
 async function scheduleCaffeineHint({ googleSheets, message, slots, tz, userId, userPrefs }) {
-    const nowZoned = moment().tz(tz);
+    const nowZoned = time.now(tz);
     const hour = nowZoned.hour();
 
     // Only trigger after 14:00
@@ -200,7 +202,7 @@ async function scheduleCaffeineHint({ googleSheets, message, slots, tz, userId, 
 
     setTimeout(async () => {
         // Re-check suppression
-        const sendTime = moment().tz(tz);
+        const sendTime = time.now(tz);
         if (shouldSuppressNow({ userPrefs, nowZoned: sendTime })) {
             console.log(`[CAFFEINE] Caffeine hint suppressed by DND/snooze for user ${userId}`);
             return;
@@ -227,7 +229,7 @@ async function scheduleCaffeineHint({ googleSheets, message, slots, tz, userId, 
             await message.author.send({ embeds: [embed], components: [row] });
 
             // Set 24h cooldown
-            const cooldownUntil = moment().tz(tz).add(24, 'hours').toISOString();
+            const cooldownUntil = time.now(tz).add(24, 'hours').toISOString();
             await setCooldown(userId, 'caffeine_hint', cooldownUntil, googleSheets);
 
             console.log(`[CAFFEINE] Sent caffeine hint to user ${userId}`);

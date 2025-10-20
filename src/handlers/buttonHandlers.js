@@ -1,60 +1,97 @@
 // Button Interaction Handlers
 // Processes all button clicks from clarifications, check-ins, and actions
 
-const { BUTTON_IDS, EMOJI, getRandomPhrase, PHRASES, formatPhrase } = require('../constants/ux');
-const { successEmbed, errorEmbed, buttonsSeverity, buttonsMealTime } = require('../ui/components');
+const { handleNaturalLanguage } = require('../../index');
+const { getSheetName } = require('../../utils/getSheetName');
+const { EMOJI, BUTTON_IDS } = require('../constants/ux');
+const { successEmbed, errorEmbed, buttonsSeverity, buttonsMealTime, buttonsBristol, buttonsSymptomType } = require('../ui/components');
 const contextMemory = require('../utils/contextMemory');
 const { EmbedBuilder } = require('discord.js');
+const db = require('../../services/sqliteBridge');
 
-// Store pending clarifications awaiting secondary input
-// userId -> { type, data, timestamp }
-const pendingClarifications = new Map();
+// Helper to generate a consistent DB key
+const getKey = (userId) => `clarification:${userId}`;
+
+// This module no longer holds state. 
+// `pendingClarifications` is now an interface to the database.
+const pendingClarifications = {
+    set: (userId, data) => {
+        // Clarifications should be short-lived, e.g., 5 minutes
+        db.set(getKey(userId), data, 300);
+    },
+    get: (userId) => {
+        return db.get(getKey(userId));
+    },
+    delete: (userId) => {
+        db.del(getKey(userId));
+    }
+};
 
 /**
- * Main button interaction router
- * @param {Interaction} interaction - Discord button interaction
+ * Main handler for all button interactions.
+ * @param {import('discord.js').ButtonInteraction} interaction - The button interaction.
  * @param {Object} googleSheets - Google Sheets service
  * @param {Object} digests - Digests module
  */
-async function handleButtonInteraction(interaction, googleSheets, digests) {
-    const customId = interaction.customId;
-    const userId = interaction.user.id;
+async function handleButtonInteraction(interaction) {
+    const { customId, user } = interaction;
+    const userId = user.id;
 
+    // Retrieve the pending clarification from the database
+    const pending = pendingClarifications.get(userId);
+    
     try {
-        // Route based on button ID prefix
-        if (customId.startsWith('symptom_')) {
-            await handleSymptomType(interaction, googleSheets);
-        } else if (customId.startsWith('severity_')) {
-            await handleSeverity(interaction, googleSheets);
-        } else if (customId.startsWith('meal_')) {
-            await handleMealTime(interaction, googleSheets);
-        } else if (customId.startsWith('bristol_')) {
-            await handleBristol(interaction, googleSheets);
-        } else if (customId.startsWith('checkin_')) {
-            await digests.handleCheckInResponse(interaction, googleSheets, contextMemory);
-        } else if (customId.startsWith('intent_')) {
-            await handleIntentClarification(interaction);
-        } else if (customId === BUTTON_IDS.undo) {
-            await handleUndo(interaction, googleSheets);
-        } else if (customId === BUTTON_IDS.dismiss) {
-            await interaction.message.delete();
-        } else if (customId.startsWith('help_')) {
-            await handleHelpButton(interaction);
-        }
-    } catch (error) {
-        console.error(`Error handling button interaction ${customId}:`, error);
+        const [namespace, value] = customId.split(':');
 
-        // Try to respond with error
-        try {
-            if (!interaction.replied && !interaction.deferred) {
-                await interaction.reply({
-                    content: `${EMOJI.error} ${getRandomPhrase(PHRASES.error)}`,
-                    ephemeral: true
-                });
-            }
-        } catch (e) {
-            console.error('Failed to send error response:', e);
+        switch (namespace) {
+            case 'severity':
+                if (pending && pending.type === 'nlu_clarification') {
+                    pending.parseResult.slots.severity = parseInt(value, 10);
+                    await handleNLUClarification(interaction, pending);
+                }
+                break;
+            case 'meal':
+                if (pending && pending.type === 'nlu_clarification') {
+                    pending.parseResult.slots.meal_time = value;
+                    await handleNLUClarification(interaction, pending);
+                }
+                break;
+            case 'symptom':
+                 if (pending && pending.type === 'nlu_clarification') {
+                    pending.parseResult.slots.symptom_type = value;
+                    await handleNLUClarification(interaction, pending);
+                }
+                break;
+            case 'bristol':
+                if (pending && pending.type === 'nlu_clarification') {
+                    pending.parseResult.slots.bristol = parseInt(value, 10);
+                    await handleNLUClarification(interaction, pending);
+                }
+                break;
+            case 'intent':
+                if (pending && pending.type === 'intent_clarification') {
+                    await handleIntentClarification(interaction, pending);
+                }
+                break;
+            case 'help':
+                await handleHelpButton(interaction);
+                break;
+            case 'action':
+                if (value === 'dismiss') {
+                    await interaction.message.delete();
+                } else if (value === 'undo') {
+                    // This requires access to googleSheets, so we might need to adjust
+                    console.log('Undo action clicked');
+                }
+                break;
+            default:
+                // Handle older or non-namespaced IDs for backward compatibility if needed
+                console.warn(`[BUTTONS] Unhandled button namespace: ${namespace}`);
         }
+
+    } catch (error) {
+        console.error('[BUTTONS] Error in handleButtonInteraction:', error);
+        await interaction.followUp({ content: 'There was an error processing this action.', ephemeral: true });
     }
 }
 

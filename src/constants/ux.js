@@ -39,69 +39,57 @@ const SEVERITY_COLORS = {
     unknown: COLORS.neutral
 };
 
-// Button Custom IDs (stable, namespaced)
+// Button Custom IDs (stable, namespaced with colons)
 const BUTTON_IDS = {
     // Symptom type clarification
-    symptom: {
-        reflux: 'symptom_reflux',
-        pain: 'symptom_pain',
-        bloat: 'symptom_bloat',
-        nausea: 'symptom_nausea',
-        general: 'symptom_general'
-    },
+    symptomReflux: 'symptom:reflux',
+    symptomPain: 'symptom:pain',
+    symptomBloat: 'symptom:bloat',
+    symptomNausea: 'symptom:nausea',
+    symptomGeneral: 'symptom:general',
 
     // Meal time clarification
-    meal: {
-        breakfast: 'meal_breakfast',
-        lunch: 'meal_lunch',
-        dinner: 'meal_dinner',
-        snack: 'meal_snack'
-    },
+    mealBreakfast: 'meal:breakfast',
+    mealLunch: 'meal:lunch',
+    mealDinner: 'meal:dinner',
+    mealSnack: 'meal:snack',
 
     // Bristol scale for BM
-    bristol: {
-        1: 'bristol_1',
-        2: 'bristol_2',
-        3: 'bristol_3',
-        4: 'bristol_4',
-        5: 'bristol_5',
-        6: 'bristol_6',
-        7: 'bristol_7'
-    },
+    bristol1: 'bristol:1',
+    bristol2: 'bristol:2',
+    bristol3: 'bristol:3',
+    bristol4: 'bristol:4',
+    bristol5: 'bristol:5',
+    bristol6: 'bristol:6',
+    bristol7: 'bristol:7',
 
     // Severity rating (1-10)
-    severity: {
-        1: 'severity_1',
-        2: 'severity_2',
-        3: 'severity_3',
-        4: 'severity_4',
-        5: 'severity_5',
-        6: 'severity_6',
-        7: 'severity_7',
-        8: 'severity_8',
-        9: 'severity_9',
-        10: 'severity_10'
-    },
+    severity1: 'severity:1',
+    severity2: 'severity:2',
+    severity3: 'severity:3',
+    severity4: 'severity:4',
+    severity5: 'severity:5',
+    severity6: 'severity:6',
+    severity7: 'severity:7',
+    severity8: 'severity:8',
+    severity9: 'severity:9',
+    severity10: 'severity:10',
 
     // Morning check-in
-    checkin: {
-        good: 'checkin_good',
-        okay: 'checkin_okay',
-        bad: 'checkin_bad'
-    },
+    checkinGood: 'checkin:good',
+    checkinOkay: 'checkin:okay',
+    checkinBad: 'checkin:bad',
 
-    // Actions
-    undo: 'undo_last',
-    dismiss: 'dismiss_msg',
+    // General Actions
+    undo: 'action:undo',
+    dismiss: 'action:dismiss',
 
     // Intent clarification
-    intent: {
-        log_food: 'intent_log_food',
-        log_symptom: 'intent_log_symptom',
-        cancel: 'intent_cancel'
-    },
+    intentLogFood: 'intent:log_food',
+    intentLogSymptom: 'intent:log_symptom',
+    intentCancel: 'intent:cancel',
 
-    // --- Conversational Help System ---
+    // Conversational Help System
     helpLogging: 'help:logging',
     helpAsking: 'help:asking',
     helpSettings: 'help:settings',
