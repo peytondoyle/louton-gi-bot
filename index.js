@@ -418,10 +418,24 @@ async function logFromNLU(message, parseResult) {
     const userTag = message.author.tag;
     const isPeyton = (userId === PEYTON_ID);
 
-    // Extract metadata (pass intent as itemType)
+    // ========== V2.1: Use validated Notes or build safely ==========
+    const { buildNotesFromParse } = require('./src/utils/notesBuild');
+
+    let notesString;
+    if (parseResult._validatedNotes) {
+        // Prefer validator's canonical string
+        notesString = parseResult._validatedNotes;
+        console.log('[NOTES] Using validated Notes v2.1');
+    } else {
+        // Fallback: build from parse safely
+        notesString = buildNotesFromParse(parseResult);
+        console.log('[NOTES] Built Notes from parse (fallback)');
+    }
+
+    // Extract metadata (pass intent as itemType) - for legacy calorie estimation
     const metadata = extractMetadata(message.content, intent);
 
-    // Build notes array
+    // Build legacy notes array (for calorie multipliers only)
     const notes = [];
 
     // Add meal time or inferred time window
@@ -504,14 +518,34 @@ async function logFromNLU(message, parseResult) {
         notes.push('calories=disabled');
     }
 
-    // Build row object for new appendRowToSheet method
+    // Build Details field with null guards
+    let details = '';
+    switch (intent) {
+        case 'bm':
+            details = slots.bristol ? `Bristol ${slots.bristol}` : 'BM';
+            break;
+        case 'food':
+        case 'drink':
+            details = (slots.item || 'entry').trim();
+            break;
+        case 'symptom':
+            details = (slots.symptom_type || 'symptom').trim();
+            break;
+        case 'reflux':
+            details = 'reflux';
+            break;
+        default:
+            details = 'entry';
+    }
+
+    // Build row object using validated Notes
     const rowObj = {
         'Timestamp': new Date().toISOString(),
         'User': userTag,
         'Type': intent,
-        'Details': slots.item || (intent === 'symptom' ? slots.symptom_type : (intent === 'reflux' ? 'reflux' : (intent === 'bm' ? (slots.bristol ? `Bristol ${slots.bristol}` : 'BM') : ''))),
+        'Details': details,
         'Severity': (intent === 'symptom' || intent === 'reflux') ? (slots.severity ? mapSeverityToLabel(slots.severity) : '') : '',
-        'Notes': googleSheets.appendNotes(notes),
+        'Notes': notesString, // Use validated/safe Notes string
         'Date': new Date().toISOString().slice(0, 10),
         'Source': 'discord-dm-nlu',
         'Calories': (caloriesVal != null && caloriesVal > 0) ? caloriesVal : ''
@@ -528,29 +562,34 @@ async function logFromNLU(message, parseResult) {
         return;
     }
 
-    // Build undo reference (format: sheetName:rowIndex)
-    let rowIndex = result.rowIndex;
-    if (!rowIndex) {
-        try {
-            const rowsResult = await googleSheets.getRows({}, sheetName);
-            rowIndex = rowsResult?.rows?.length ? rowsResult.rows.length + 1 : 2; // Default to 2 if unknown
-        } catch (e) {
-            rowIndex = 2; // Safe fallback
+    console.log(`[SAVE] ✅ Successfully appended to ${sheetName}`);
+
+    // ========== POST-SAVE OPERATIONS (wrapped to prevent false errors) ==========
+    try {
+        // Build undo reference (format: sheetName:rowIndex)
+        let rowIndex = result.rowIndex;
+        if (!rowIndex) {
+            try {
+                const rowsResult = await googleSheets.getRows({}, sheetName);
+                rowIndex = rowsResult?.rows?.length ? rowsResult.rows.length + 1 : 2;
+            } catch (e) {
+                rowIndex = 2; // Safe fallback
+                console.warn('[UNDO] Could not determine row index, using fallback');
+            }
         }
-    }
-    const undoId = `${sheetName}:${rowIndex}`;
+        const undoId = `${sheetName}:${rowIndex}`;
 
-    // Add to context memory
-    contextMemory.push(userId, {
-        type: intent,
-        details: rowObj.Details,
-        severity: rowObj.Severity,
-        timestamp: Date.now()
-    });
+        // Add to context memory
+        contextMemory.push(userId, {
+            type: intent,
+            details: rowObj.Details,
+            severity: rowObj.Severity,
+            timestamp: Date.now()
+        });
 
-    // ========== PHASE 2: POST-LOG CHIPS ==========
-    // Show quick-action chips after successful log
-    const chips = buildPostLogChips({ undoId, intent });
+        // ========== PHASE 2: POST-LOG CHIPS ==========
+        // Show quick-action chips after successful log
+        const chips = buildPostLogChips({ undoId, intent });
 
     // UI polish: Success response with calories for Peyton
     if (intent === 'food' || intent === 'drink') {
@@ -598,14 +637,20 @@ async function logFromNLU(message, parseResult) {
         console.error('[FOLLOWUP] Error scheduling contextual follow-ups:', error);
     }
 
-    // Check for trigger linking (if symptom/reflux)
-    if (intent === 'symptom' || intent === 'reflux') {
-        await offerTriggerLink(message, userId);
-        await checkRoughPatch(message, userId);
-        await surfaceTrendChip(message, userTag, userId);
+        // Check for trigger linking (if symptom/reflux)
+        if (intent === 'symptom' || intent === 'reflux') {
+            await offerTriggerLink(message, userId);
+            await checkRoughPatch(message, userId);
+            await surfaceTrendChip(message, userTag, userId);
 
-        // Schedule a follow-up DM in 90-150 minutes
-        await scheduleSymptomFollowup(userId);
+            // Schedule a follow-up DM in 90-150 minutes
+            await scheduleSymptomFollowup(userId);
+        }
+
+    } catch (postSaveError) {
+        console.error('[SAVE] Post-save operation failed (log was successful):', postSaveError);
+        // Do NOT send error to user - the save succeeded, just chips/context failed
+        // User already got success confirmation above
     }
 }
 
