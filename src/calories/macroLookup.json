@@ -1,0 +1,8 @@
+{
+    "oatmeal": { "per": "cup", "kcal": 160, "protein": 6, "carbs": 27, "fat": 3 },
+    "salad": { "per": "cup", "kcal": 100, "protein": 5, "carbs": 15, "fat": 3 },
+    "chicken breast": { "per": "oz", "kcal": 47, "protein": 9, "carbs": 0, "fat": 1 },
+    "rice": { "per": "cup", "kcal": 205, "protein": 4, "carbs": 45, "fat": 0 },
+    "berries": { "per": "cup", "kcal": 80, "protein": 1, "carbs": 20, "fat": 0 },
+    "nuts": { "per": "oz", "kcal": 170, "protein": 6, "carbs": 6, "fat": 15 }
+}

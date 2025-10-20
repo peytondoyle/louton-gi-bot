@@ -41,6 +41,8 @@ const CALORIE_MAP = {
   "noodles": 200
 };
 
+const { CALORIE_MAP: CALORIE_LOOKUP } = require('./calorieLookup.json'); // Use lookup.json as primary source
+
 // Initialize OpenAI client (lazy - only if API key exists)
 let openai = null;
 function getOpenAI() {
@@ -129,77 +131,51 @@ async function llmEstimateOne(food) {
 }
 
 /**
- * Estimate calories for item + sides (multi-component)
- * @param {string} item - Main food item
- * @param {string} sides - Comma/&/and-separated sides
- * @returns {Promise<number|null>} Total estimated calories or null
+ * Master calorie estimation function for an item and its sides.
+ * Prioritizes deterministic lookup, then falls back to LLM if enabled.
+ * @param {string} item - The main food item.
+ * @param {string} sides - Additional items/modifiers.
+ * @returns {Promise<number|null>} Estimated total calories or null.
  */
 async function estimateCaloriesForItemAndSides(item, sides) {
-  const parts = [];
+  let totalCalories = 0;
+  let notes = [];
 
-  // Add main item
-  if (item) {
-    parts.push(norm(item));
-  }
+  // Combine item and sides for initial lookup attempts
+  const fullDescription = `${item || ''} ${sides || ''}`.trim();
+  const components = fullDescription.split(/\s*,\s*|\s+with\s+/).filter(Boolean);
 
-  // Split sides by common separators: ',', '&', 'and'
-  if (sides) {
-    const raw = norm(sides);
-    raw.split(/,|&| and /g)
-      .map(s => s.trim())
-      .filter(Boolean)
-      .forEach(x => parts.push(x));
-  }
+  for (const component of components) {
+    let componentCalories = null;
 
-  if (parts.length === 0) {
-    console.log('[CAL-EST] ⚠️  No parts to estimate');
-    return null;
-  }
-
-  console.log(`[CAL-EST] 📊 Estimating calories for: ${parts.join(', ')}`);
-
-  let total = 0;
-  let hits = 0;
-
-  for (const p of parts) {
-    // 1) Direct map hit
-    if (CALORIE_MAP[p] != null) {
-      console.log(`[CAL-EST] ✅ Map hit: "${p}" = ${CALORIE_MAP[p]} kcal`);
-      total += CALORIE_MAP[p];
-      hits++;
-      continue;
-    }
-
-    // 2) Try to match partial words (e.g., "oatmeal with banana" -> "oatmeal", "banana")
-    let found = false;
-    for (const [key, cal] of Object.entries(CALORIE_MAP)) {
-      if (p.includes(key) || key.includes(p)) {
-        console.log(`[CAL-EST] ✅ Partial match: "${p}" ~= "${key}" = ${cal} kcal`);
-        total += cal;
-        hits++;
-        found = true;
-        break;
+    // 1. Try deterministic lookup first
+    const key = norm(component);
+    if (CALORIE_LOOKUP[key]) {
+      componentCalories = CALORIE_LOOKUP[key];
+      notes.push(`✅ Partial match: "${component}" ~= "${key}" = ${componentCalories} kcal`);
+    } else if (process.env.CAL_EST_USE_LLM === 'true') {
+      // 2. Fallback to LLM if enabled
+      const llmResult = await llmEstimateOne(component);
+      if (llmResult && llmResult.calories) {
+        componentCalories = llmResult.calories;
+        notes.push(`🤖 LLM estimate for "${component}": ${componentCalories} kcal`);
+      } else {
+        notes.push(`❌ No estimate for "${component}"`);
       }
-    }
-    if (found) continue;
-
-    // 3) LLM fallback for this component
-    const guess = await llmEstimateOne(p);
-    if (guess != null) {
-      total += guess;
-      hits++;
     } else {
-      console.log(`[CAL-EST] ❌ No estimate for "${p}"`);
+        notes.push(`❌ No deterministic estimate for "${component}"`);
+    }
+
+    if (componentCalories !== null) {
+      totalCalories += componentCalories;
     }
   }
 
-  if (hits === 0) {
-    console.log('[CAL-EST] ❌ No estimates found');
-    return null;
-  }
-
-  console.log(`[CAL-EST] 📊 Total: ${total} kcal (${hits}/${parts.length} components)`);
-  return total;
+  console.log(`[CAL-EST] 📊 Estimating calories for: ${fullDescription}`);
+  notes.forEach(note => console.log(`[CAL-EST] ${note}`));
+  console.log(`[CAL-EST] 📊 Total: ${totalCalories} kcal (${components.length - notes.filter(n => n.startsWith('❌')).length}/${components.length} components)`);
+  
+  return totalCalories > 0 ? totalCalories : null;
 }
 
 module.exports = { estimateCaloriesForItemAndSides };
