@@ -294,9 +294,26 @@ function rulesParse(text, options = {}) {
     }
 
     // ========== 6. INTENT CLASSIFICATION (Food vs Drink) ==========
+    // Special case: smoothies/shakes are FOOD (not drink), even though they're liquid
+    const isSmoothieOrShake = /\b(smoothie|shake|protein shake|breakfast shake)\b/i.test(cleanedLower);
+
     const drinkDetected = isBeverage(cleanedLower);
     const hasDrinkAction = INTENT_KEYWORDS.drink.some(word => cleanedLower.includes(word));
     const hasFoodAction = INTENT_KEYWORDS.food.some(word => cleanedLower.includes(word));
+
+    // If it's a smoothie/shake, force food intent
+    if (isSmoothieOrShake && result.slots.item) {
+        result.intent = "food";
+        result.confidence = 0.85;
+        console.log('[NLU-V2] Smoothie/shake detected → forced to food intent');
+
+        if (!result.slots.meal_time && !result.slots.time) {
+            result.slots.meal_time = getCurrentWindow();
+            result.slots.meal_time_note = "inferred from current time";
+        }
+
+        return result;
+    }
 
     if (drinkDetected || (hasDrinkAction && !hasFoodAction)) {
         result.intent = "drink";

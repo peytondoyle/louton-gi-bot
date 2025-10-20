@@ -609,82 +609,76 @@ async function logFromNLU(message, parseResult) {
         confirmText = `${emoji} Logged **${rowObj.Details}**.`;
     }
 
-    // Send success message IMMEDIATELY (before any chips/followups)
-    let sentMessage = null;
+    // ========== 3. SEND SUCCESS MESSAGE (Critical) ==========
     try {
         const chips = buildPostLogChips({ undoId, intent });
-        sentMessage = await message.reply({
+        await message.reply({
             content: confirmText,
             components: chips
         });
         console.log('[UI] ✅ Success message sent with chips');
     } catch (chipError) {
-        // Chips failed, send without chips
         console.warn('[UI] Chips failed, sending plain success:', chipError.message);
         try {
-            sentMessage = await message.reply({ content: confirmText });
-        } catch (fallbackError) {
-            console.error('[UI] Even fallback failed:', fallbackError);
-            // At this point, save worked but we can't message user - log it
+            await message.reply({ content: confirmText });
+            console.log('[UI] ✅ Success message sent (plain)');
+        } catch (plainError) {
+            console.error('[UI] Failed to send any success message:', plainError);
+            // Continue - save succeeded even if we can't message user
         }
     }
 
-    // ========== POST-SUCCESS NON-FATAL OPERATIONS (Fire-and-forget) ==========
-    // All operations use .catch() - failures logged but don't affect user experience
-
-    // Context memory (synchronous, safe)
-    try {
-        contextMemory.push(userId, {
-            type: intent,
-            details: rowObj.Details,
-            severity: rowObj.Severity,
-            timestamp: Date.now()
-        });
-    } catch (e) {
-        console.warn('[POSTSAVE][warn] context memory:', e.message);
-    }
-
-    // Trigger warnings (food/drink only) - fire and forget
-    if (intent === 'food' || intent === 'drink') {
-        checkTriggerWarning(message, userId, rowObj.Details)
-            .catch(e => console.warn('[POSTSAVE][warn] trigger warning:', e.message));
-    }
-
-    // Contextual follow-ups - fire and forget
-    (async () => {
+    // ========== 4. RETURN TRUE IMMEDIATELY (Success guaranteed) ==========
+    // Spawn post-save work in background - NEVER await, NEVER throw
+    setImmediate(() => {
+        // Context memory
         try {
-            const userPrefs = await getUserPrefs(userId, googleSheets);
-            const tz = userPrefs.TZ || TIMEZONE;
-            await scheduleContextualFollowups({
-                googleSheets,
-                message,
-                parseResult: { intent, slots },
-                tz,
-                userId,
-                userPrefs
+            contextMemory.push(userId, {
+                type: intent,
+                details: rowObj.Details,
+                severity: rowObj.Severity,
+                timestamp: Date.now()
             });
         } catch (e) {
-            console.warn('[POSTSAVE][warn] followups:', e.message);
+            console.warn('[POSTSAVE][warn] context:', e.message);
         }
-    })();
 
-    // Trigger linking (symptom/reflux only) - fire and forget
-    if (intent === 'symptom' || intent === 'reflux') {
-        offerTriggerLink(message, userId)
-            .catch(e => console.warn('[POSTSAVE][warn] trigger link:', e.message));
+        // Trigger warnings
+        if (intent === 'food' || intent === 'drink') {
+            checkTriggerWarning(message, userId, rowObj.Details)
+                .catch(e => console.warn('[POSTSAVE][warn] trigger:', e.message));
+        }
 
-        checkRoughPatch(message, userId)
-            .catch(e => console.warn('[POSTSAVE][warn] rough patch:', e.message));
+        // Contextual follow-ups
+        (async () => {
+            try {
+                const userPrefs = await getUserPrefs(userId, googleSheets);
+                const tz = userPrefs.TZ || TIMEZONE;
+                await scheduleContextualFollowups({
+                    googleSheets,
+                    message,
+                    parseResult: { intent, slots },
+                    tz,
+                    userId,
+                    userPrefs
+                });
+            } catch (e) {
+                console.warn('[POSTSAVE][warn] followups:', e.message);
+            }
+        })();
 
-        surfaceTrendChip(message, userTag, userId)
-            .catch(e => console.warn('[POSTSAVE][warn] trend chip:', e.message));
+        // Symptom-specific
+        if (intent === 'symptom' || intent === 'reflux') {
+            offerTriggerLink(message, userId).catch(e => console.warn('[POSTSAVE][warn] link:', e.message));
+            checkRoughPatch(message, userId).catch(e => console.warn('[POSTSAVE][warn] patch:', e.message));
+            surfaceTrendChip(message, userTag, userId).catch(e => console.warn('[POSTSAVE][warn] trend:', e.message));
+            scheduleSymptomFollowup(userId).catch(e => console.warn('[POSTSAVE][warn] followup:', e.message));
+        }
 
-        scheduleSymptomFollowup(userId)
-            .catch(e => console.warn('[POSTSAVE][warn] symptom followup:', e.message));
-    }
+        console.log('[SAVE] ✅ Post-save background tasks dispatched');
+    });
 
-    console.log('[SAVE] ✅ Post-save operations complete');
-    return true; // Save succeeded
+    return true; // Save succeeded - return BEFORE background tasks complete
 }
 
 /**
