@@ -45,6 +45,7 @@ const { validateQuality } = require('./src/utils/qualityCheck');
 const { generateQuery, synthesizeAnswer } = require('./src/insights/AIAnalyst');
 const DialogManager = require('./src/dialogs/DialogManager');
 const symptomLogDialog = require('./src/dialogs/symptomLogDialog');
+const ProactiveScheduler = require('./src/scheduler/proactiveScheduler');
 
 // Calorie estimation
 const { estimateCaloriesForItemAndSides } = require('./src/nutrition/estimateCalories');
@@ -214,6 +215,9 @@ client.once('ready', async () => {
 
     // Initialize the DialogManager with the logging function
     symptomLogDialog.initialize(logFromNLU);
+
+    // Start the Proactive Analyst scheduler
+    ProactiveScheduler.start(client, { googleSheets, getUserProfile });
 
     console.log('🚀 Bot is fully operational and ready for commands!');
 });
@@ -1132,16 +1136,31 @@ async function handleReminders(message, args) {
     const currentPrefs = profile.prefs;
 
     if (!args || args.trim() === '' || args.trim().toLowerCase() === 'reminders' || args.trim().toLowerCase() === 'settings') {
-        return message.reply(
-            '🔔 **Reminder Settings**\n\n' +
-            '**Usage:** (Just say what you want!)\n' +
-            '• "turn reminders on"\n' +
-            '• "set my morning check-in for 8am"\n' +
-            '• "disable the evening recap"\n' +
-            '• "change my timezone to America/New_York"'
-        );
+        // --- Display Current Settings ---
+        const status = currentPrefs.DM === 'on' ? '✅ **On**' : '❌ **Off**';
+        const morning = currentPrefs.MorningHHMM ? `☀️ Morning: \`${currentPrefs.MorningHHMM}\`` : '☀️ Morning: Off';
+        const evening = currentPrefs.EveningHHMM ? `🌙 Evening: \`${currentPrefs.EveningHHMM}\`` : '🌙 Evening: Off';
+        const inactivity = currentPrefs.InactivityHHMM ? `🚶 Inactivity: \`${currentPrefs.InactivityHHMM}\`` : '🚶 Inactivity: Off';
+        const tz = `🌐 Timezone: \`${currentPrefs.TZ}\``;
+
+        const statusMessage = `
+🔔 **Your Reminder Settings**
+Status: ${status}
+${morning}
+${evening}
+${inactivity}
+${tz}
+
+You can change these by talking to me naturally, for example:
+• "Turn reminders on"
+• "Set my morning check-in for 8am"
+• "Change my timezone to America/New_York"
+        `;
+        return message.reply(statusMessage.trim());
     }
 
+    // --- Handle Setting Changes ---
+    // (This part remains the same)
     const [sub, val] = args.trim().split(/\s+/);
 
     // Handle on/off
