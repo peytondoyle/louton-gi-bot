@@ -189,8 +189,15 @@ async function handleAddPortion(interaction, deps) {
     const sheetName = parts[2];
     const rowIndex = parseInt(parts[3], 10);
 
+    // Create context object for pending operations
+    const ctx = {
+        guildId: interaction.guildId || 'dm',
+        channelId: interaction.channel.id,
+        authorId: userId
+    };
+
     // Store pending state
-    await pending.set(pending.keyFrom(interaction), { type: 'portion', data: { sheetName, rowIndex } }, TTL_SECONDS);
+    await pending.set(pending.keyFrom(ctx), { type: 'portion', data: { sheetName, rowIndex } }, TTL_SECONDS);
 
     await interaction.reply({
         content: '📏 Select a portion size:',
@@ -207,7 +214,14 @@ async function handlePortionSelection(interaction, deps) {
     const userId = interaction.user.id;
     const customId = interaction.customId;
 
-    const pendingState = await pending.get(pending.keyFrom(interaction));
+    // Create context object for pending operations
+    const ctx = {
+        guildId: interaction.guildId || 'dm',
+        channelId: interaction.channel.id,
+        authorId: userId
+    };
+
+    const pendingState = await pending.get(pending.keyFrom(ctx));
     if (!pendingState || pendingState.type !== 'portion' || !pendingState.data) {
         await interaction.reply({
             content: '❌ Session expired or invalid. Please log again.',
@@ -245,7 +259,7 @@ async function handlePortionSelection(interaction, deps) {
     }
 
     await applyPortionUpdate(interaction, deps, sheetName, rowIndex, portionText);
-    await pending.clear(pending.keyFrom(interaction));
+    await pending.clear(pending.keyFrom(ctx));
 }
 
 /**
@@ -324,8 +338,15 @@ async function handleAddBrand(interaction, deps) {
     const sheetName = parts[2];
     const rowIndex = parseInt(parts[3], 10);
 
+    // Create context object for pending operations
+    const ctx = {
+        guildId: interaction.guildId || 'dm',
+        channelId: interaction.channel.id,
+        authorId: userId
+    };
+
     // Store pending state
-    await pending.set(pending.keyFrom(interaction), { type: 'brand', data: { sheetName, rowIndex } }, TTL_SECONDS);
+    await pending.set(pending.keyFrom(ctx), { type: 'brand', data: { sheetName, rowIndex } }, TTL_SECONDS);
 
     // Try to detect category from row details
     const category = await detectCategoryFromDetails(sheetName, rowIndex, deps);
@@ -345,7 +366,14 @@ async function handleBrandSelection(interaction, deps) {
     const userId = interaction.user.id;
     const customId = interaction.customId;
 
-    const pendingState = await pending.get(pending.keyFrom(interaction));
+    // Create context object for pending operations
+    const ctx = {
+        guildId: interaction.guildId || 'dm',
+        channelId: interaction.channel.id,
+        authorId: userId
+    };
+
+    const pendingState = await pending.get(pending.keyFrom(ctx));
     if (!pendingState || pendingState.type !== 'brand' || !pendingState.data) {
         await interaction.reply({
             content: '❌ Session expired or invalid. Please log again.',
@@ -385,7 +413,7 @@ async function handleBrandSelection(interaction, deps) {
     }
 
     await applyBrandUpdate(interaction, deps, sheetName, rowIndex, brand.value);
-    await pending.clear(pending.keyFrom(interaction));
+    await pending.clear(pending.keyFrom(ctx));
 }
 
 /**
@@ -465,8 +493,15 @@ async function handleAddPhoto(interaction, deps) {
     const sheetName = parts[2];
     const rowIndex = parseInt(parts[3], 10);
 
+    // Create context object for pending operations
+    const ctx = {
+        guildId: interaction.guildId || 'dm',
+        channelId: interaction.channel.id,
+        authorId: userId
+    };
+
     // Store pending state
-    await pending.set(pending.keyFrom(interaction), { type: 'photo', data: { sheetName, rowIndex } }, TTL_SECONDS);
+    await pending.set(pending.keyFrom(ctx), { type: 'photo', data: { sheetName, rowIndex } }, TTL_SECONDS);
 
     await interaction.reply({
         content: '📸 Send a message with one or more photos in the next 2 minutes.',
@@ -483,7 +518,14 @@ async function handlePhotoMessage(message, deps) {
     const { googleSheets } = deps;
     const userId = message.author.id;
 
-    const pendingState = await pending.get(pending.keyFrom(message));
+    // Create context object for pending operations
+    const ctx = {
+        guildId: message.guildId || 'dm',
+        channelId: message.channel.id,
+        authorId: userId
+    };
+
+    const pendingState = await pending.get(pending.keyFrom(ctx));
     if (!pendingState || pendingState.type !== 'photo' || !pendingState.data) return false;
 
     const { sheetName, rowIndex } = pendingState.data;
@@ -510,7 +552,7 @@ async function handlePhotoMessage(message, deps) {
         const result = await googleSheets.getRows({}, sheetName);
         if (!result.success || !result.rows[rowIndex - 2]) {
             await message.reply('❌ Entry not found.');
-            await pending.clear(pending.keyFrom(message));
+            await pending.clear(pending.keyFrom(ctx));
             return true;
         }
 
@@ -529,12 +571,12 @@ async function handlePhotoMessage(message, deps) {
         await message.reply(`✅ Added ${photos.length} photo(s) to your entry!`);
 
         console.log(`[PHOTO] Added ${photos.length} photos to row ${rowIndex}`);
-        await pending.clear(pending.keyFrom(message));
+        await pending.clear(pending.keyFrom(ctx));
         return true;
     } catch (error) {
         console.error('[PHOTO] Error handling photo:', error);
         await message.reply('❌ Failed to add photos.');
-        await pending.clear(pending.keyFrom(message));
+        await pending.clear(pending.keyFrom(ctx));
         return true;
     }
 }
@@ -546,21 +588,28 @@ async function handleCustomInput(message, deps) {
     const userId = message.author.id;
     const text = message.content.trim();
 
+    // Create context object for pending operations
+    const ctx = {
+        guildId: message.guildId || 'dm',
+        channelId: message.channel.id,
+        authorId: userId
+    };
+
     // Check for pending portion
-    const portionPendingState = await pending.get(pending.keyFrom(message));
+    const portionPendingState = await pending.get(pending.keyFrom(ctx));
     if (portionPendingState && portionPendingState.type === 'portion' && portionPendingState.data) {
         const { sheetName, rowIndex } = portionPendingState.data;
         await applyPortionUpdate({ reply: (opts) => message.reply(opts) }, deps, sheetName, rowIndex, text);
-        await pending.clear(pending.keyFrom(message));
+        await pending.clear(pending.keyFrom(ctx));
         return true;
     }
 
     // Check for pending brand
-    const brandPendingState = await pending.get(pending.keyFrom(message));
+    const brandPendingState = await pending.get(pending.keyFrom(ctx));
     if (brandPendingState && brandPendingState.type === 'brand' && brandPendingState.data) {
         const { sheetName, rowIndex } = brandPendingState.data;
         await applyBrandUpdate({ reply: (opts) => message.reply(opts) }, deps, sheetName, rowIndex, text);
-        await pending.clear(pending.keyFrom(message));
+        await pending.clear(pending.keyFrom(ctx));
         return true;
     }
 

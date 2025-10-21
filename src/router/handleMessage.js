@@ -634,7 +634,13 @@ module.exports = async function handleMessage(message, deps) {
         const profile = await deps.getUserProfile(userId, deps.googleSheets);
         const tz = profile.prefs.TZ;
 
-        const pendingContext = await deps.get(deps.keyFrom(message));
+        // Create context object for pending operations
+        const ctx = {
+            guildId: message.guildId || 'dm',
+            channelId: message.channel.id,
+            authorId: message.author.id
+        };
+        const pendingContext = await deps.get(deps.keyFrom(ctx));
         if (pendingContext && pendingContext.type === 'expecting_symptom_follow_up') {
             const result = await deps.understand(text, { userId, tz, forcedIntent: 'symptom' });
             if (result.intent === 'symptom' || result.intent === 'reflux') {

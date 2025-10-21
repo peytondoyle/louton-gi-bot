@@ -37,8 +37,15 @@ async function handleButtonInteraction(interaction) {
     const { customId, user } = interaction;
     const userId = user.id;
 
+    // Create context object for pending operations
+    const ctx = {
+        guildId: interaction.guildId || 'dm',
+        channelId: interaction.channel.id,
+        authorId: user.id
+    };
+
     // Retrieve the pending clarification from the database
-    const pendingClarification = await pending.get(pending.keyFrom(interaction));
+    const pendingClarification = await pending.get(pending.keyFrom(ctx));
     
     try {
         const [namespace, value] = customId.split(':');
@@ -103,7 +110,14 @@ async function handleIntentClarification(interaction) {
     const userId = interaction.user.id;
     const customId = interaction.customId;
 
-    const pendingClarification = await pending.get(pending.keyFrom(interaction));
+    // Create context object for pending operations
+    const ctx = {
+        guildId: interaction.guildId || 'dm',
+        channelId: interaction.channel.id,
+        authorId: userId
+    };
+
+    const pendingClarification = await pending.get(pending.keyFrom(ctx));
     if (!pendingClarification || pendingClarification.type !== 'intent_clarification') {
         await interaction.update({
             content: 'This action has expired. Please send your message again.',
@@ -113,7 +127,7 @@ async function handleIntentClarification(interaction) {
     }
 
     // Clear the pending clarification
-    await pending.clear(pending.keyFrom(interaction));
+    await pending.clear(pending.keyFrom(ctx));
 
     if (customId === BUTTON_IDS.intent.cancel) {
         await interaction.update({
@@ -179,8 +193,15 @@ async function handleSymptomType(interaction, googleSheets) {
     const symptom = symptomMap[customId];
     if (!symptom) return;
 
+    // Create context object for pending operations
+    const ctx = {
+        guildId: interaction.guildId || 'dm',
+        channelId: interaction.channel.id,
+        authorId: userId
+    };
+
     // Store pending clarification
-    await pending.set(pending.keyFrom(interaction), { type: 'severity', symptomData: symptom }, TTL_SECONDS);
+    await pending.set(pending.keyFrom(ctx), { type: 'severity', symptomData: symptom }, TTL_SECONDS);
 
     // Ask for severity
     await interaction.update({
@@ -198,7 +219,14 @@ async function handleSeverity(interaction, googleSheets) {
     const userId = interaction.user.id;
     const user = interaction.user;
 
-    const pendingClarification = await pending.get(pending.keyFrom(interaction));
+    // Create context object for pending operations
+    const ctx = {
+        guildId: interaction.guildId || 'dm',
+        channelId: interaction.channel.id,
+        authorId: userId
+    };
+
+    const pendingClarification = await pending.get(pending.keyFrom(ctx));
     if (!pendingClarification) {
         await interaction.reply({
             content: `${EMOJI.error} Session expired. Please start over.`,
@@ -221,7 +249,7 @@ async function handleSeverity(interaction, googleSheets) {
         pendingClarification.parseResult.missing = pendingClarification.parseResult.missing.filter(m => m !== 'severity');
 
         // Clear pending
-        await pending.clear(pending.keyFrom(interaction));
+        await pending.clear(pending.keyFrom(ctx));
 
         // If all slots filled, log via NLU system
         if (pendingClarification.parseResult.missing.length === 0) {
@@ -287,7 +315,7 @@ async function handleSeverity(interaction, googleSheets) {
     }
 
     // Clear pending
-    await pending.clear(pending.keyFrom(interaction));
+    await pending.clear(pending.keyFrom(ctx));
 
     // Log to sheets
     const result = await googleSheets.appendRow({
@@ -347,7 +375,14 @@ async function handleMealTime(interaction, googleSheets) {
     const userId = interaction.user.id;
     const user = interaction.user;
 
-    const pendingClarification = await pending.get(pending.keyFrom(interaction));
+    // Create context object for pending operations
+    const ctx = {
+        guildId: interaction.guildId || 'dm',
+        channelId: interaction.channel.id,
+        authorId: userId
+    };
+
+    const pendingClarification = await pending.get(pending.keyFrom(ctx));
     if (!pendingClarification || pendingClarification.type !== 'mealTime') {
         await interaction.reply({
             content: `${EMOJI.error} Session expired. Please start over.`,
@@ -368,7 +403,7 @@ async function handleMealTime(interaction, googleSheets) {
     if (!mealTime) return;
 
     // Clear pending
-    await pending.clear(pending.keyFrom(interaction));
+    await pending.clear(pending.keyFrom(ctx));
 
     // Log to sheets with meal time in notes
     const result = await googleSheets.appendRow({
@@ -414,7 +449,14 @@ async function handleBristol(interaction, googleSheets) {
     const userId = interaction.user.id;
     const user = interaction.user;
 
-    const pendingClarification = await pending.get(pending.keyFrom(interaction));
+    // Create context object for pending operations
+    const ctx = {
+        guildId: interaction.guildId || 'dm',
+        channelId: interaction.channel.id,
+        authorId: userId
+    };
+
+    const pendingClarification = await pending.get(pending.keyFrom(ctx));
     if (!pendingClarification || pendingClarification.type !== 'bristol') {
         await interaction.reply({
             content: `${EMOJI.error} Session expired. Please start over.`,
@@ -427,7 +469,7 @@ async function handleBristol(interaction, googleSheets) {
     const bristolNum = interaction.customId.split('_')[1];
 
     // Clear pending
-    await pending.clear(pending.keyFrom(interaction));
+    await pending.clear(pending.keyFrom(ctx));
 
     // Log to sheets
     const result = await googleSheets.appendRow({
@@ -505,8 +547,15 @@ async function requestSymptomClarification(message) {
 async function requestMealTimeClarification(message, entryData) {
     const { buttonsMealTime } = require('../ui/components');
 
+    // Create context object for pending operations
+    const ctx = {
+        guildId: message.guildId || 'dm',
+        channelId: message.channel.id,
+        authorId: message.author.id
+    };
+
     // Store pending clarification
-    await pending.set(pending.keyFrom(message), { type: 'mealTime', entryData: entryData }, TTL_SECONDS);
+    await pending.set(pending.keyFrom(ctx), { type: 'mealTime', entryData: entryData }, TTL_SECONDS);
 
     await message.reply({
         content: `${EMOJI.food} When did you have this?`,
@@ -521,8 +570,15 @@ async function requestMealTimeClarification(message, entryData) {
 async function requestBristolClarification(message, notes = '') {
     const { buttonsBristol } = require('../ui/components');
 
+    // Create context object for pending operations
+    const ctx = {
+        guildId: message.guildId || 'dm',
+        channelId: message.channel.id,
+        authorId: message.author.id
+    };
+
     // Store pending clarification
-    await pending.set(pending.keyFrom(message), { type: 'bristol', notes: notes }, TTL_SECONDS);
+    await pending.set(pending.keyFrom(ctx), { type: 'bristol', notes: notes }, TTL_SECONDS);
 
     await message.reply({
         content: `${EMOJI.bm} I'll log this bowel movement. Can you provide more details?`,
