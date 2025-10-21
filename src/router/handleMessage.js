@@ -424,8 +424,8 @@ async function postLogActions(message, parseResult, undoId, caloriesVal, rowObj,
     // ========== 2. BACKGROUND TASKS (Fire-and-forget) ==========
     // All followup actions wrapped - cannot throw upward
 
-    // Post-meal check (food/drink only)
-    if (intent === 'food' || intent === 'drink') {
+    // Post-meal check (food/drink only) - skip for sub-actions to prevent duplicates
+    if ((intent === 'food' || intent === 'drink') && !parseResult.isSubAction) {
         (async () => {
             try {
                 const [sheetName, rowIndexStr] = undoId.split(':');
@@ -470,6 +470,8 @@ async function postLogActions(message, parseResult, undoId, caloriesVal, rowObj,
     if (parseResult.multi_actions && parseResult.multi_actions.length > 0) {
         for (const action of parseResult.multi_actions) {
             delete action.multi_actions;
+            // Mark as sub-action to prevent duplicate post-meal checks
+            action.isSubAction = true;
             setTimeout(() => {
                 logFromNLU(message, action, deps)
                     .catch(e => console.error('[Multi-Action] Sub-action failed:', e));
