@@ -596,10 +596,6 @@ module.exports = async function handleMessage(message, deps) {
             case 'nlu':
                 await handleNLUStats(message, args);
                 return;
-            case 'debug':
-                // Deprecated, remove later
-                await message.reply('Debug command is deprecated.');
-                return;
             default:
                 await message.reply(`${deps.EMOJI.thinking} I don't recognize that command. Try \`!help\`.`);
                 return;
@@ -628,6 +624,7 @@ module.exports = async function handleMessage(message, deps) {
 
         const result = await deps.understand(text, understandOptions);
         deps.postprocess(result);
+        deps.disambiguate(result, { userId, tz });
         console.log(`🧠 NLU-V2: ${deps.formatParseResult(result)}`);
         deps.recordNLUMetrics(result);
         deps.recordNLUParse(result, { fromCache: false, usedLLM: false });

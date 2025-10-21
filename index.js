@@ -135,6 +135,7 @@ function makeDependencies() {
         understand: require('./src/nlu/understand-v2').understand,
         formatParseResult: require('./src/nlu/understand-v2').formatParseResult,
         postprocess: require('./src/nlu/postprocess').postprocess,
+        disambiguate: require('./src/nlu/disambiguate').disambiguate,
         recordNLUMetrics: require('./src/nlu/metrics-v2').record,
         recordNLUParse: require('./src/commands/nluStats').recordNLUParse,
         extractMetadata: require('./src/nlu/rules').extractMetadata,

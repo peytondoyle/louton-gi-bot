@@ -594,8 +594,6 @@ You can manage your reminders and preferences with simple phrases:
 }
 
 
-// Cleanup expired pending clarifications every 5 minutes - Handled by services/pending.js
-// setInterval(() => { }, 5 * 60 * 1000);
 
 module.exports = {
     handleButtonInteraction,

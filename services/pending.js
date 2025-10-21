@@ -7,10 +7,20 @@ const TTL_SECONDS = 2 * 60; // 2 minutes
  * @returns {string} A unique key string.
  */
 function keyFrom(message) {
-    const userId = message.author.id;
-    const channelId = message.channel.id;
-    const guildId = message.guild ? message.guild.id : 'dm';
-    return `pending:${guildId}:${channelId}:${userId}`;
+    try {
+        if (!message || !message.author || !message.channel) {
+            console.error('[PENDING] Invalid message object provided to keyFrom');
+            return null;
+        }
+        
+        const userId = message.author.id;
+        const channelId = message.channel.id;
+        const guildId = message.guild ? message.guild.id : 'dm';
+        return `pending:${guildId}:${channelId}:${userId}`;
+    } catch (error) {
+        console.error('[PENDING] Error generating key from message:', error);
+        return null;
+    }
 }
 
 /**
@@ -19,8 +29,22 @@ function keyFrom(message) {
  * @returns {Promise<object|null>} The pending context object or null if not found or expired.
  */
 async function get(key) {
-    const record = await sqlite.get(key);
-    return record; // sqlite.get should already handle expired records based on TTL
+    try {
+        const record = await sqlite.get(key);
+        if (!record) return null;
+        
+        // Additional expiration check for edge cases
+        if (record.expiresAt && Date.now() > record.expiresAt) {
+            console.log('[PENDING] Context expired, cleaning up:', key);
+            await clear(key); // Clean up expired record
+            return null;
+        }
+        
+        return record;
+    } catch (error) {
+        console.error('[PENDING] Error retrieving pending context:', error);
+        return null; // Gracefully handle database errors
+    }
 }
 
 /**
@@ -28,28 +52,87 @@ async function get(key) {
  * @param {string} key - The key for the pending context.
  * @param {object} payload - The data to store for the pending context.
  * @param {number} ttlSeconds - Time-to-live in seconds.
+ * @returns {Promise<boolean>} True if successful, false if failed.
  */
 async function set(key, payload, ttlSeconds = TTL_SECONDS) {
-    await sqlite.set(key, payload, ttlSeconds);
+    try {
+        // Validate inputs
+        if (!key || !payload) {
+            console.error('[PENDING] Invalid key or payload provided');
+            return false;
+        }
+        
+        if (ttlSeconds <= 0) {
+            console.error('[PENDING] Invalid TTL provided:', ttlSeconds);
+            return false;
+        }
+        
+        // Add expiration timestamp to payload for additional safety
+        const enrichedPayload = {
+            ...payload,
+            expiresAt: Date.now() + (ttlSeconds * 1000),
+            createdAt: Date.now()
+        };
+        
+        await sqlite.set(key, enrichedPayload, ttlSeconds);
+        return true;
+    } catch (error) {
+        console.error('[PENDING] Error setting pending context:', error);
+        return false; // Gracefully handle database errors
+    }
 }
 
 /**
  * Clears a pending context.
  * @param {string} key - The key for the pending context.
+ * @returns {Promise<boolean>} True if successful, false if failed.
  */
 async function clear(key) {
-    await sqlite.del(key);
+    try {
+        await sqlite.del(key);
+        return true;
+    } catch (error) {
+        console.error('[PENDING] Error clearing pending context:', error);
+        return false; // Gracefully handle database errors
+    }
 }
 
 // Background sweeper to clean up expired entries from sqliteBridge
 setInterval(() => {
-    sqlite.cleanup(); // No .catch() as it's not async
+    try {
+        sqlite.cleanup(); // No .catch() as it's not async
+    } catch (error) {
+        console.error('[PENDING] Error during cleanup:', error);
+    }
 }, 30 * 1000).unref(); // Run every 30 seconds, unref to not block process exit
+
+/**
+ * Checks if a pending context is expired
+ * @param {object} context - The pending context object
+ * @returns {boolean} True if expired, false otherwise
+ */
+function isExpired(context) {
+    if (!context || !context.expiresAt) return false;
+    return Date.now() > context.expiresAt;
+}
+
+/**
+ * Gets the time remaining until expiration in seconds
+ * @param {object} context - The pending context object
+ * @returns {number} Seconds remaining, or 0 if expired
+ */
+function getTimeRemaining(context) {
+    if (!context || !context.expiresAt) return 0;
+    const remaining = Math.max(0, Math.floor((context.expiresAt - Date.now()) / 1000));
+    return remaining;
+}
 
 module.exports = {
     keyFrom,
     get,
     set,
     clear,
+    isExpired,
+    getTimeRemaining,
     TTL_SECONDS // Export TTL for consistency if needed elsewhere
 };
