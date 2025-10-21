@@ -249,12 +249,12 @@ async function logFromNLU(message, parseResult, deps) {
         const fullItemDescription = (slots.item + (slots.sides ? `, ${slots.sides}` : '')).toLowerCase().trim();
         if (userProfile.learnedCalorieMap && userProfile.learnedCalorieMap[fullItemDescription]) {
             caloriesVal = userProfile.learnedCalorieMap[fullItemDescription];
-            console.log(`[CAL-MEM] ✅ Recalled calories for "${fullItemDescription}": ${caloriesVal} kcal`);
+            // Recalled from memory
         } else {
             try {
                 caloriesVal = await deps.estimateCaloriesForItemAndSides(slots.item, slots.sides);
                 if (caloriesVal !== null && caloriesVal > 0) {
-                    console.log(`[CAL-MEM] 🧠 Learning calories for "${fullItemDescription}": ${caloriesVal} kcal`);
+                    // Learning new calories
                     userProfile.learnedCalorieMap[fullItemDescription] = caloriesVal;
                     deps.updateUserProfile(userId, userProfile, deps.googleSheets).catch(err => {
                         console.error(`[USER_PROFILE] Non-blocking profile update failed: ${err.message}`);
@@ -271,10 +271,10 @@ async function logFromNLU(message, parseResult, deps) {
     let notesString;
     if (slots._validatedNotes) {
         notesString = slots._validatedNotes;
-        console.log('[NOTES] Using validated Notes v2.1');
+        // Using validated notes
     } else {
         notesString = buildNotesFromParse(parseResult);
-        console.log('[NOTES] Built Notes from parse (fallback)');
+        // Built notes from parse
     }
 
     const metadata = deps.extractMetadata(message.content, intent);
@@ -357,7 +357,7 @@ async function logFromNLU(message, parseResult, deps) {
         return { success: false };
     }
 
-    console.log(`[SAVE] ✅ Successfully appended to ${sheetName}`);
+    // Successfully saved
 
     let rowIndex = result.rowIndex || 2;
     try {
@@ -467,7 +467,7 @@ async function postLogActions(message, parseResult, undoId, caloriesVal, rowObj,
                     }, 500);
                 }
             }
-            console.log('[SAVE] ✅ Post-save background tasks dispatched');
+            // Background tasks dispatched
         } catch(e) {
             console.error('[postLogActions] Error in background tasks:', e);
         }

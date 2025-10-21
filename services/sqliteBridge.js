@@ -8,7 +8,7 @@ let Database;
 try {
     Database = require('better-sqlite3');
 } catch (e) {
-    console.log('[SQLITE] better-sqlite3 not available (optional dependency)');
+    // Silently handle missing optional dependency
     Database = null;
 }
 
@@ -26,7 +26,7 @@ let db = null;
  */
 function init() {
     if (!Database) {
-        console.log('[SQLITE] Skipping initialization (better-sqlite3 not available)');
+        // Silently skip initialization if better-sqlite3 not available
         return;
     }
 
@@ -48,9 +48,9 @@ function init() {
         // Create index on expiry for fast cleanup
         db.prepare(`CREATE INDEX IF NOT EXISTS idx_expiry ON cache(expiry)`).run();
 
-        console.log(`[SQLITE] ✅ Initialized at ${DB_PATH}`);
+        // SQLite initialized successfully
     } catch (error) {
-        console.error('[SQLITE] ❌ Failed to initialize:', error);
+        // Silently handle initialization errors
         db = null;
     }
 }
@@ -71,9 +71,9 @@ function set(key, value, ttlSec = 300) {
         db.prepare(`REPLACE INTO cache (key, value, expiry) VALUES (?, ?, ?)`)
             .run(key, valueStr, expiry);
 
-        console.log(`[SQLITE] Set ${key} (TTL: ${ttlSec}s)`);
+        // Value cached successfully
     } catch (error) {
-        console.error(`[SQLITE] Failed to set ${key}:`, error);
+        // Silently handle cache errors
     }
 }
 
@@ -96,14 +96,11 @@ function get(key) {
         if (Date.now() > row.expiry) {
             // Expired - delete and return null
             db.prepare(`DELETE FROM cache WHERE key = ?`).run(key);
-            console.log(`[SQLITE] Expired: ${key}`);
             return null;
         }
 
-        console.log(`[SQLITE] Hit: ${key}`);
         return JSON.parse(row.value);
     } catch (error) {
-        console.error(`[SQLITE] Failed to get ${key}:`, error);
         return null;
     }
 }
@@ -117,9 +114,8 @@ function del(key) {
 
     try {
         db.prepare(`DELETE FROM cache WHERE key = ?`).run(key);
-        console.log(`[SQLITE] Deleted: ${key}`);
     } catch (error) {
-        console.error(`[SQLITE] Failed to delete ${key}:`, error);
+        // Silently handle delete errors
     }
 }
 
@@ -134,13 +130,8 @@ function cleanup() {
         const result = db.prepare(`DELETE FROM cache WHERE expiry < ?`).run(Date.now());
         const deleted = result.changes;
 
-        if (deleted > 0) {
-            console.log(`[SQLITE] Cleaned up ${deleted} expired entries`);
-        }
-
         return deleted;
     } catch (error) {
-        console.error('[SQLITE] Cleanup failed:', error);
         return 0;
     }
 }
@@ -163,7 +154,6 @@ function getStats() {
             oldestExpiry: oldestRow?.oldest
         };
     } catch (error) {
-        console.error('[SQLITE] Failed to get stats:', error);
         return { totalKeys: 0, size: 0, oldestExpiry: null };
     }
 }
@@ -176,9 +166,8 @@ function clearAll() {
 
     try {
         db.prepare(`DELETE FROM cache`).run();
-        console.log('[SQLITE] Cleared all entries');
     } catch (error) {
-        console.error('[SQLITE] Failed to clear:', error);
+        // Silently handle clear errors
     }
 }
 

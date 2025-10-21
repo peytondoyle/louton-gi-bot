@@ -73,13 +73,13 @@ async function llmEstimateOne(food) {
   const key = 'cal_' + norm(food);
   const cached = llmCache.get(key);
   if (cached) {
-    console.log(`[CAL-EST] ⚡ Cache hit for "${food}": ${cached} kcal`);
+    // Cache hit
     return cached;
   }
 
   const client = getOpenAI();
   if (!client) {
-    console.log('[CAL-EST] ⚠️  OPENAI_API_KEY not set, skipping LLM estimate');
+    // OpenAI API key not available
     return null;
   }
 
@@ -87,12 +87,10 @@ async function llmEstimateOne(food) {
 
   const controller = new AbortController();
   const timer = setTimeout(() => {
-    console.log('[CAL-EST] ⏱️  Timeout (800ms exceeded)');
     controller.abort();
   }, 800);
 
   try {
-    console.log(`[CAL-EST] 🤖 Calling gpt-4o-mini for "${food}"...`);
     const startTime = Date.now();
 
     const resp = await client.chat.completions.create(
@@ -112,20 +110,13 @@ async function llmEstimateOne(food) {
     const num = parseInt(text.match(/\d+/)?.[0], 10);
 
     if (Number.isFinite(num) && num > 0) {
-      console.log(`[CAL-EST] ✅ Success (${elapsed}ms) - "${food}": ${num} kcal`);
       llmCache.set(key, num);
       return num;
     }
 
-    console.log(`[CAL-EST] ❌ Invalid response: "${text}"`);
     return null;
   } catch (error) {
     clearTimeout(timer);
-    if (error.name === 'AbortError') {
-      console.log('[CAL-EST] ⏱️  Request aborted (timeout)');
-    } else {
-      console.log(`[CAL-EST] ❌ Error: ${error.message}`);
-    }
     return null;
   }
 }
@@ -176,9 +167,7 @@ async function estimateCaloriesForItemAndSides(item, sides) {
     }
   }
 
-  console.log(`[CAL-EST] 📊 Estimating calories for: ${fullDescription}`);
-  notes.forEach(note => console.log(`[CAL-EST] ${note}`));
-  console.log(`[CAL-EST] 📊 Total: ${totalCalories} kcal (${components.length - notes.filter(n => n.startsWith('❌')).length}/${components.length} components)`);
+  // Calorie estimation completed
   
   return totalCalories > 0 ? totalCalories : null;
 }

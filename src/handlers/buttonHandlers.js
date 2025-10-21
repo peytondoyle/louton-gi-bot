@@ -603,15 +603,4 @@ module.exports = {
     handleHelpButton,
 };
 
-Object.defineProperty(module.exports, 'pendingClarifications', {
-  get() {
-    throw new Error(
-      'DEPRECATED: pendingClarifications was removed. Use services/pending.js'
-    );
-  },
-  set() {
-    throw new Error('Cannot set deprecated export pendingClarifications');
-},
-  configurable: false,
-  enumerable: false,
-});
+// Deprecated export removed - use services/pending.js instead

@@ -41,6 +41,9 @@
     "node-cron": "^3.0.3",
     "openai": "^6.5.0"
   },
+  "optionalDependencies": {
+    "better-sqlite3": "^9.6.0"
+  },
   "devDependencies": {
     "eslint": "^9.0.0",
     "eslint-plugin-import": "^2.29.0",

@@ -193,12 +193,12 @@ function safeCorrectToken(token, context = {}) {
         // Only allow corrections with very high confidence (>0.94)
         const score = jaroWinkler(raw, correction.toLowerCase());
         if (score < 0.94) {
-            console.log(`[SPELL] Blocked domain-flip correction: "${raw}" → "${correction}" (score: ${score.toFixed(2)}, in BM/symptom domain)`);
+            // Blocked domain-flip correction
             return token; // Keep original
         }
     }
 
-    console.log(`[SPELL] Corrected: "${raw}" → "${correction}"`);
+    // Spell correction applied
     return correction;
 }
 

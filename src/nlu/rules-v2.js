@@ -92,7 +92,7 @@ function rulesParse(text, options = {}) {
     const hasBMKeyword = tokens.some(tok => BM_KEYWORDS.has(tok));
 
     if (hasBMKeyword) {
-        console.log('[NLU-V2] 🚨 BM EARLY ROUTE ACTIVATED');
+        // BM early route activated
         result.intent = "bm";
         result.confidence = 0.90;
 
@@ -101,7 +101,7 @@ function rulesParse(text, options = {}) {
             if (BRISTOL_ADJ[token]) {
                 result.slots.bristol = String(BRISTOL_ADJ[token]);
                 result.slots.bristol_note = `auto-detected from ${token}`;
-                console.log(`[NLU-V2] Bristol auto-detected: ${token} → ${result.slots.bristol}`);
+                // Bristol auto-detected
                 break;
             }
         }
@@ -150,7 +150,7 @@ function rulesParse(text, options = {}) {
 
     if (spellingResult.corrections.length > 0) {
         result.meta.spellingCorrected = spellingResult.corrections;
-        console.log(`[NLU-V2] Spell corrected:`, spellingResult.corrections);
+        // Spell corrections applied
     }
 
     // ========== 2. CONVERSATIONAL INTENTS (Early Exit) ==========
@@ -350,7 +350,7 @@ function rulesParse(text, options = {}) {
     if (isSmoothieOrShake && result.slots.item) {
         result.intent = "food";
         result.confidence = 0.85;
-        console.log('[NLU-V2] Smoothie/shake detected → forced to food intent');
+        // Smoothie/shake detected
 
         if (!result.slots.meal_time && !result.slots.time) {
             result.slots.meal_time = getCurrentWindow();
@@ -420,7 +420,7 @@ function rulesParse(text, options = {}) {
         result.intent = "food";
         result.confidence = 0.85;
         result.meta.nounOnlyMealPattern = true;
-        console.log('[NLU-V2] Noun-only meal pattern detected (no verb, but has food + meal time)');
+        // Noun-only meal pattern detected
 
         if (!result.slots.item) {
             result.missing.push("item");
@@ -436,7 +436,7 @@ function rulesParse(text, options = {}) {
 
     // ========== 8. FORCED INTENT OVERRIDE ==========
     if (forcedIntent && result.intent !== forcedIntent) {
-        console.log(`[NLU-V2] ⚠️ Intent forced from '${result.intent}' to '${forcedIntent}'`);
+        // Intent forced
         result.intent = forcedIntent;
         // Re-evaluate confidence and missing slots based on the new intent
         if (forcedIntent === 'food' || forcedIntent === 'drink') {
