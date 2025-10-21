@@ -103,7 +103,22 @@ async function handleButtonInteraction(interaction) {
 
     } catch (error) {
         console.error('[BUTTONS] Error in handleButtonInteraction:', error);
-        await interaction.followUp({ content: 'There was an error processing this action.', ephemeral: true });
+        // Try to respond appropriately based on interaction state
+        try {
+            if (!interaction.replied && !interaction.deferred) {
+                await interaction.reply({
+                    content: 'There was an error processing this action.',
+                    flags: 64 // Use flags for ephemeral (64 = ephemeral)
+                });
+            } else {
+                await interaction.followUp({
+                    content: 'There was an error processing this action.',
+                    flags: 64 // Use flags for ephemeral
+                });
+            }
+        } catch (followUpError) {
+            console.error('[BUTTONS] Failed to send error message:', followUpError.message);
+        }
     }
 }
 
@@ -602,7 +617,10 @@ async function handlePostMealCheckButton(interaction, customId) {
     // Parse the customId: pmc.severity|timestamp
     const parts = customId.split('.');
     if (parts.length < 2) {
-        await interaction.reply({ content: '❌ Invalid button format.', ephemeral: true });
+        await interaction.update({
+            content: '❌ Invalid button format.',
+            components: [] // Remove the buttons
+        });
         return;
     }
 
@@ -619,9 +637,10 @@ async function handlePostMealCheckButton(interaction, customId) {
     // Get the pending post-meal check
     const pendingCheck = await pending.get(pending.keyFrom(ctx));
     if (!pendingCheck || pendingCheck.type !== 'post_meal_check') {
-        await interaction.reply({
+        // Update the existing message instead of replying
+        await interaction.update({
             content: '⏰ This check-in has expired. No worries!',
-            ephemeral: true
+            components: [] // Remove the buttons
         });
         return;
     }
