@@ -1,145 +1,288 @@
 /**
- * NLU Postprocessing V2.1
- * Normalizes tokens, strips trailing phrases, builds canonical Notes format
- * Integrates with Notes Validator for v2.1 compliance
+ * NLU V2 Postprocessing
+ * Normalizes tokens, strips trailing meal phrases, ensures canonical ordering
  */
-
-const { buildNotesFromSlots, logCoverageReport } = require('../utils/notesValidator');
-const { inferCategory, inferPrep } = require('../utils/categoryMapper');
 
 /**
- * Postprocess parse result
- * @param {Object} parseResult - Raw parse result from rules
- * @param {string} originalText - Original user input
- * @returns {Object} - Processed result with normalized tokens
+ * Postprocess NLU parse result
+ * @param {Object} result - Parse result from rules or LLM
+ * @returns {Object} - Normalized parse result
  */
-function postprocess(parseResult, originalText = '') {
-    const { slots } = parseResult;
-
-    // Strip trailing meal phrases from sides
-    if (slots.sides) {
-        slots.sides = stripMealPhrases(slots.sides);
+function postprocess(result) {
+    if (!result || !result.slots) {
+        return result;
     }
 
-    // Normalize lists ("a, b & c")
-    if (slots.sides) {
-        slots.sides = normalizeLists(slots.sides);
+    const normalized = { ...result };
+    
+    // Normalize item tokens
+    if (normalized.slots.item) {
+        normalized.slots.item = normalizeItemToken(normalized.slots.item);
     }
-
-    // Clamp numeric ranges
-    if (slots.severity) {
-        slots.severity = Math.max(1, Math.min(10, parseInt(slots.severity, 10)));
+    
+    // Normalize sides tokens
+    if (normalized.slots.sides) {
+        normalized.slots.sides = normalizeSidesToken(normalized.slots.sides);
     }
-    if (slots.bristol) {
-        slots.bristol = Math.max(1, Math.min(7, parseInt(slots.bristol, 10)));
+    
+    // Normalize symptom tokens
+    if (normalized.slots.symptom_type) {
+        normalized.slots.symptom_type = normalizeSymptomToken(normalized.slots.symptom_type);
     }
-
-    // ========== V2.1: Auto-infer category and prep ==========
-    const metadata = {};
-
-    // Infer category from item
-    if (slots.item && (parseResult.intent === 'food' || parseResult.intent === 'drink')) {
-        const category = inferCategory(slots.item);
-        if (category) {
-            metadata.category = category;
-        }
+    
+    // Clean up meal time references
+    if (normalized.slots.meal_time) {
+        normalized.slots.meal_time = normalizeMealTime(normalized.slots.meal_time);
     }
-
-    // Infer prep method from original text
-    if (originalText) {
-        const prep = inferPrep(originalText);
-        if (prep) {
-            metadata.prep = prep;
-        }
-    }
-
-    // Add confidence source
-    if (parseResult.decision) {
-        if (parseResult.decision.includes('rescued_llm')) {
-            metadata.confidence = 'merged';
-        } else if (parseResult.decision.includes('llm')) {
-            metadata.confidence = 'llm';
-        } else {
-            metadata.confidence = 'rules';
-        }
-    }
-
-    // ========== V2.1: Build validated canonical Notes ==========
-    const validatedNotes = buildNotesFromSlots(slots, metadata);
-    slots._validatedNotes = validatedNotes;
-
-    // Legacy: also build token array for backward compatibility
-    const notesTokens = buildNotesTokens(slots);
-    slots._notesTokens = notesTokens;
-
-    // Log coverage periodically
-    logCoverageReport();
-
-    return parseResult;
+    
+    // Ensure canonical ordering of slots
+    normalized.slots = reorderSlots(normalized.slots);
+    
+    // Remove empty or null slots
+    normalized.slots = cleanEmptySlots(normalized.slots);
+    
+    return normalized;
 }
 
 /**
- * Strip meal time phrases from text
+ * Normalize item token by removing trailing meal phrases
+ * @param {string} item - Raw item token
+ * @returns {string} - Normalized item
  */
-function stripMealPhrases(text) {
-    return text
-        .replace(/\s+(for|at|during)\s+(breakfast|lunch|dinner|snack)\b/gi, '')
-        .trim();
+function normalizeItemToken(item) {
+    if (!item || typeof item !== 'string') return item;
+    
+    let normalized = item.trim();
+    
+    // Remove trailing meal phrases
+    const mealPhrases = [
+        /\s+for\s+(breakfast|lunch|dinner|snack|meal)$/i,
+        /\s+(breakfast|lunch|dinner|snack|meal)$/i,
+        /\s+this\s+(morning|afternoon|evening|night)$/i,
+        /\s+(morning|afternoon|evening|night)$/i
+    ];
+    
+    for (const pattern of mealPhrases) {
+        normalized = normalized.replace(pattern, '').trim();
+    }
+    
+    // Remove trailing punctuation
+    normalized = normalized.replace(/[.,!?;:]+$/, '').trim();
+    
+    // Handle common contractions
+    normalized = normalized.replace(/\bI\s+had\s+/i, '');
+    normalized = normalized.replace(/\bI\s+ate\s+/i, '');
+    normalized = normalized.replace(/\bI\s+drank\s+/i, '');
+    
+    return normalized || item;
 }
 
 /**
- * Normalize lists (comma/and cleanup)
+ * Normalize sides token
+ * @param {string} sides - Raw sides token
+ * @returns {string} - Normalized sides
  */
-function normalizeLists(text) {
-    return text
-        .replace(/\s*,\s*/g, ', ')           // Normalize commas
-        .replace(/\s+and\s+/g, ' & ')        // "and" → "&"
-        .replace(/,\s*&/g, ' &')             // ", &" → " &"
-        .trim();
+function normalizeSidesToken(sides) {
+    if (!sides || typeof sides !== 'string') return sides;
+    
+    let normalized = sides.trim();
+    
+    // Remove leading connectors
+    normalized = normalized.replace(/^(with|and|&|plus)\s+/i, '');
+    
+    // Remove trailing meal phrases
+    const mealPhrases = [
+        /\s+for\s+(breakfast|lunch|dinner|snack|meal)$/i,
+        /\s+(breakfast|lunch|dinner|snack|meal)$/i
+    ];
+    
+    for (const pattern of mealPhrases) {
+        normalized = normalized.replace(pattern, '').trim();
+    }
+    
+    return normalized || sides;
 }
 
 /**
- * Build canonical Notes tokens from slots
+ * Normalize symptom token
+ * @param {string} symptom - Raw symptom token
+ * @returns {string} - Normalized symptom
  */
-function buildNotesTokens(slots) {
-    const tokens = [];
+function normalizeSymptomToken(symptom) {
+    if (!symptom || typeof symptom !== 'string') return symptom;
+    
+    let normalized = symptom.trim().toLowerCase();
+    
+    // Standardize common symptom terms
+    const symptomMap = {
+        'stomach ache': 'stomach pain',
+        'stomach pain': 'stomach pain',
+        'belly ache': 'stomach pain',
+        'tummy ache': 'stomach pain',
+        'heart burn': 'heartburn',
+        'heartburn': 'heartburn',
+        'acid reflux': 'reflux',
+        'reflux': 'reflux',
+        'bloating': 'bloating',
+        'bloated': 'bloating',
+        'gas': 'gas',
+        'gassy': 'gas',
+        'nausea': 'nausea',
+        'nauseous': 'nausea',
+        'cramps': 'cramps',
+        'cramping': 'cramps'
+    };
+    
+    return symptomMap[normalized] || symptom;
+}
 
-    // Meal/time
-    if (slots.meal_time) tokens.push(`meal=${slots.meal_time}`);
-    if (slots.time) tokens.push(`time=${slots.time}`);
-    if (slots.time_approx) tokens.push(`time≈${slots.time_approx}`);
+/**
+ * Normalize meal time token
+ * @param {string} mealTime - Raw meal time token
+ * @returns {string} - Normalized meal time
+ */
+function normalizeMealTime(mealTime) {
+    if (!mealTime || typeof mealTime !== 'string') return mealTime;
+    
+    let normalized = mealTime.trim().toLowerCase();
+    
+    // Standardize meal time references
+    const mealTimeMap = {
+        'morning': 'breakfast',
+        'breakfast': 'breakfast',
+        'brunch': 'breakfast',
+        'lunch': 'lunch',
+        'afternoon': 'lunch',
+        'dinner': 'dinner',
+        'evening': 'dinner',
+        'night': 'dinner',
+        'late night': 'dinner',
+        'snack': 'snack',
+        'snacks': 'snack'
+    };
+    
+    return mealTimeMap[normalized] || mealTime;
+}
 
-    // Portions
-    if (slots.portion) tokens.push(`portion=${slots.portion}`);
-    if (slots.portion_g) tokens.push(`portion_g=${slots.portion_g}`);
-    if (slots.portion_ml) tokens.push(`portion_ml=${slots.portion_ml}`);
+/**
+ * Reorder slots in canonical order
+ * @param {Object} slots - Raw slots object
+ * @returns {Object} - Reordered slots
+ */
+function reorderSlots(slots) {
+    const canonicalOrder = [
+        'item',
+        'sides', 
+        'symptom_type',
+        'severity',
+        'meal_time',
+        'time',
+        'date',
+        'quantity',
+        'unit',
+        'prep_method',
+        'dairy_type',
+        'caffeine_type',
+        'category',
+        'brand',
+        'variant',
+        'notes'
+    ];
+    
+    const reordered = {};
+    
+    // Add slots in canonical order
+    for (const key of canonicalOrder) {
+        if (slots[key] !== undefined && slots[key] !== null && slots[key] !== '') {
+            reordered[key] = slots[key];
+        }
+    }
+    
+    // Add any remaining slots not in canonical order
+    for (const [key, value] of Object.entries(slots)) {
+        if (!canonicalOrder.includes(key) && value !== undefined && value !== null && value !== '') {
+            reordered[key] = value;
+        }
+    }
+    
+    return reordered;
+}
 
-    // Brands
-    if (slots.brand_variant) tokens.push(`brand_variant=${slots.brand_variant}`);
-    if (slots.brand) tokens.push(`brand=${slots.brand}`);
+/**
+ * Remove empty or null slots
+ * @param {Object} slots - Raw slots object
+ * @returns {Object} - Cleaned slots
+ */
+function cleanEmptySlots(slots) {
+    const cleaned = {};
+    
+    for (const [key, value] of Object.entries(slots)) {
+        if (value !== undefined && value !== null && value !== '' && value !== 'null' && value !== 'undefined') {
+            cleaned[key] = value;
+        }
+    }
+    
+    return cleaned;
+}
 
-    // Sides
-    if (slots.sides) tokens.push(`sides=${slots.sides}`);
-
-    // Flags
-    if (slots.caffeine) tokens.push('caffeine');
-    if (slots.decaf) tokens.push('decaf');
-    if (slots.dairy) tokens.push('dairy');
-    if (slots.non_dairy) tokens.push('non_dairy');
-
-    // Severity/Bristol
-    if (slots.severity) tokens.push(`severity=${slots.severity}`);
-    if (slots.bristol) tokens.push(`bristol=${slots.bristol}`);
-
-    // Notes
-    if (slots.severity_note) tokens.push(slots.severity_note);
-    if (slots.bristol_note) tokens.push(slots.bristol_note);
-    if (slots.meal_time_note) tokens.push(slots.meal_time_note);
-
-    return tokens;
+/**
+ * Extract secondary intents from complex messages
+ * @param {Object} result - Parse result
+ * @returns {Object} - Result with secondary intents
+ */
+function extractSecondaryIntents(result) {
+    if (!result || !result.slots) {
+        return result;
+    }
+    
+    const secondary = [];
+    
+    // Check for secondary beverages in sides
+    if (result.slots.sides) {
+        const beverageKeywords = ['tea', 'coffee', 'water', 'juice', 'soda', 'milk', 'smoothie', 'chai'];
+        const sides = result.slots.sides.toLowerCase();
+        
+        for (const keyword of beverageKeywords) {
+            if (sides.includes(keyword)) {
+                secondary.push({
+                    intent: 'drink',
+                    item: keyword,
+                    confidence: 0.8
+                });
+            }
+        }
+    }
+    
+    // Check for secondary symptoms
+    if (result.slots.symptom_type) {
+        const symptomKeywords = ['pain', 'ache', 'burning', 'cramping', 'nausea'];
+        const symptom = result.slots.symptom_type.toLowerCase();
+        
+        for (const keyword of symptomKeywords) {
+            if (symptom.includes(keyword) && !symptom.includes('no') && !symptom.includes('not')) {
+                secondary.push({
+                    intent: 'symptom',
+                    symptom_type: keyword,
+                    confidence: 0.7
+                });
+            }
+        }
+    }
+    
+    if (secondary.length > 0) {
+        result.secondary = secondary;
+    }
+    
+    return result;
 }
 
 module.exports = {
     postprocess,
-    buildNotesTokens
+    normalizeItemToken,
+    normalizeSidesToken,
+    normalizeSymptomToken,
+    normalizeMealTime,
+    reorderSlots,
+    cleanEmptySlots,
+    extractSecondaryIntents
 };
