@@ -186,7 +186,7 @@ function registerDigests(client, googleSheets = null) {
         timezone: timezone
     });
 
-    console.log(`✅ Scheduled morning check-in for 08:00 ${timezone}`);
+    // Morning check-in scheduled silently
 
     // Evening Recap at 20:30 local time (optional)
     // Cron: "30 20 * * *" = At 20:30 every day
@@ -203,7 +203,7 @@ function registerDigests(client, googleSheets = null) {
             timezone: timezone
         });
 
-        console.log(`✅ Scheduled evening recap for 20:30 ${timezone}`);
+        // Evening recap scheduled silently
     }
 
     // Return control functions

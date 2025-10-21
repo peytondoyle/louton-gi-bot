@@ -45,7 +45,6 @@ startHeartbeat();
 Message.prototype.reply = function (content, options) {
   return sendCleanReply(this, content, options);
 };
-console.log('✅ Patched Message.prototype.reply() → clean sends (no gray bar)');
 
 const recentMessageIds = new Set();
 
@@ -209,24 +208,12 @@ function makeDependencies() {
 // Event handlers
 client.on('ready', async () => {
     console.log(`✅ Bot logged in as ${client.user.tag}!`);
-    console.log(`✅ Bot ID: ${client.user.id}`);
-    console.log(`✅ Servers: ${client.guilds.cache.size}`);
     
     // Initialize services
     await googleSheets.initialize();
-    console.log('✅ Google Sheets initialized');
-    
-    // Start job runner
     startJobRunner();
-    console.log('✅ Job runner started');
-    
-    // Register digests
     digests.registerDigests(client, googleSheets);
-    console.log('✅ Daily digests registered');
-    
-    // Start proactive scheduler
     ProactiveScheduler.start(client, { googleSheets, getUserProfile });
-    console.log('✅ Proactive scheduler started');
     
     console.log('🎉 Bot is fully operational!');
 });

@@ -60,7 +60,6 @@ class GoogleSheetsService {
             // await this.initializeInsightsSheet();
 
             this.initialized = true;
-            console.log('✅ Google Sheets service initialized successfully');
         } catch (error) {
             console.error('❌ Failed to initialize Google Sheets:', error.message);
             throw error;

@@ -205,7 +205,7 @@ function start(client) {
     // Store interval ID for cleanup
     jobsStore._interval = interval;
     
-    console.log('[JOBS] Job runner started (15s interval)');
+    // Job runner started silently
 }
 
 /**

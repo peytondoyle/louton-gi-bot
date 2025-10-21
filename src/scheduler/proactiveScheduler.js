@@ -46,7 +46,7 @@ This might be a connection worth keeping an eye on!
             }
         });
 
-        console.log('[PROACTIVE] ✅ Proactive analysis scheduler started. Will run daily at 10:00 AM.');
+        // Proactive scheduler started silently
     },
 
     /**

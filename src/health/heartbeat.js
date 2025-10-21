@@ -32,7 +32,7 @@ function startHeartbeat() {
         }
     }, HEARTBEAT_INTERVAL_MS);
 
-    console.log(`[HEARTBEAT] ✅ Started (interval: ${HEARTBEAT_INTERVAL_MS / 60000} minutes)`);
+    // Heartbeat started silently
 }
 
 /**
