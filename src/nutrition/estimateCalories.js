@@ -138,6 +138,11 @@ async function llmEstimateOne(food) {
  * @returns {Promise<number|null>} Estimated total calories or null.
  */
 async function estimateCaloriesForItemAndSides(item, sides) {
+  // Calorie estimator hardening — skip junk like "you"
+  const txt = (item || '').toLowerCase().trim();
+  if (!txt || txt.length < 3) return null;
+  if (/\b(you|thanks|thank you|ok|okay|fine|solid)\b/.test(txt)) return null; // user replies
+
   let totalCalories = 0;
   let notes = [];
 

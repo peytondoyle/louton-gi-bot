@@ -413,17 +413,36 @@ async function postLogActions(message, parseResult, undoId, caloriesVal, rowObj,
 
     if (intent === 'food' || intent === 'drink') {
         try {
-            await message.channel.send("How are you feeling after that?");
             const [sheetName, rowIndexStr] = undoId.split(':');
             const rowId = parseInt(rowIndexStr, 10);
+            const userTabName = sheetName;
 
+            const ctx = { guildId: message.guildId || 'dm', channelId: message.channelId, authorId: message.author.id };
+            const key = deps.keyFrom(ctx);
             const mealRef = {
-                tab: sheetName,
+                tab: userTabName,
                 rowId: rowId,
                 timestampISO: rowObj.Timestamp,
-                item: rowObj.Item,
+                item: rowObj.Item
             };
-            await deps.set(deps.keyFrom(message), { type: 'post_meal_check', mealRef: mealRef }, 120);
+            deps.set(key, {
+                type: 'post_meal_check',
+                mealRef
+            }, 120_000);
+
+            // Buttons are optional; simple question is fine
+            await message.reply({
+                content: 'How are you feeling after that?',
+                components: [{
+                    type: 1,
+                    components: [
+                        { type: 2, style: 2, custom_id: `pmc.none|${mealRef.timestampISO}`, label: 'None' },
+                        { type: 2, style: 1, custom_id: `pmc.mild|${mealRef.timestampISO}`, label: 'Mild' },
+                        { type: 2, style: 1, custom_id: `pmc.moderate|${mealRef.timestampISO}`, label: 'Moderate' },
+                        { type: 2, style: 4, custom_id: `pmc.severe|${mealRef.timestampISO}`, label: 'Severe' },
+                    ]
+                }]
+            }).catch(e => { console.warn('[postLogActions] follow-up send failed', e); deps.clear(key); });
         } catch (e) {
             console.warn('[postLogActions] Error sending follow-up question:', e.message);
         }
@@ -456,44 +475,36 @@ async function postLogActions(message, parseResult, undoId, caloriesVal, rowObj,
 }
 
 async function handlePostMealCheck(message, pendingCheck, deps) {
+    const ctx = { guildId: message.guildId || 'dm', channelId: message.channelId, authorId: message.author.id };
+    const key = deps.keyFrom(ctx);
     const mealRef = pendingCheck?.mealRef;
     const text = message.content.trim();
-    const userId = message.author.id;
-  
-    // Enhanced polarity detection
-    const POS = /\b(solid|all good|pretty good|good|great|fine|ok|okay|no issues|felt fine|nope|none)\b/i;
+
+    // Positive = no symptoms
+    const POS = /\b(solid|all good|pretty good|good|great|fine|ok|okay|no issues|felt fine|nope|none|no)\b/i;
     const NEG = /\b(reflux|heartburn|nausea|bloat(?:ed|ing)?|gas(?:sy)?|cramp(?:s|ing)?|pain|burning|regurgitation)\b/i;
-    const sevWord = (text.match(/\b(mild|moderate|severe)\b/i) || [])[1];
-    const sevNum = (text.match(/\b([1-9]|10)\b/) || [])[1];
-  
+
     if (POS.test(text) && !NEG.test(text)) {
-        try { 
-            if (mealRef) await deps.updateMealNotes(deps.googleSheets, mealRef, ["after_effect=ok"]); 
-        } catch (e) { 
-            console.warn("[POST_MEAL_CHECK] notes append failed:", e); 
-        }
-        await message.reply('Got it — no symptoms. ✅');
-        await deps.clear(deps.keyFrom(message));
+        try { if (mealRef) await deps.updateMealNotes(deps.googleSheets, mealRef, ['after_effect=ok']); } catch (e) { console.warn('[POST_MEAL_CHECK] notes append failed', e); }
+        await message.reply({ content: 'Got it — no symptoms. ✅' });
+        deps.clear(key);
         return;
     }
-  
-    if (NEG.test(text) && (sevNum || sevWord)) {
-        const negMatch = text.match(NEG);
-        const severity = sevNum ? Number(sevNum) : ({ mild:3, moderate:6, severe:9 }[sevWord.toLowerCase()] || 5);
-        await logSymptomForMeal(userId, negMatch[1].toLowerCase(), severity, mealRef ? `${mealRef.tab}:${mealRef.rowId}` : null, deps);
-        await message.reply({ content: `Logged ${negMatch[1]} (severity ${severity}).` });
-        await deps.clear(deps.keyFrom(message));
-        return;
-    }
-  
-    // Only show severity buttons if NEG detected but no severity provided
-    if (NEG.test(text)) {
-        await message.reply({ content: "Any symptoms to log?", components: [deps.buildSeverityButtons()] });
-        await deps.set(deps.keyFrom(message), { type: 'post_meal_check_wait_severity', ...pendingCheck, createdAt: Date.now() }, 120);
-    } else {
-        // No clear positive or negative - show generic follow-up
-        await message.reply({ content: "How are you feeling after that meal?" });
-    }
+
+    // Negative with/without severity → ask buttons or log (you likely already have this)
+    await message.reply({
+        content: 'Any symptoms to log?',
+        components: [{
+            type: 1,
+            components: [
+                { type: 2, style: 2, custom_id: `pmc.none|${mealRef?.timestampISO||''}`, label: 'None' },
+                { type: 2, style: 1, custom_id: `pmc.mild|${mealRef?.timestampISO||''}`, label: 'Mild' },
+                { type: 2, style: 1, custom_id: `pmc.moderate|${mealRef?.timestampISO||''}`, label: 'Moderate' },
+                { type: 2, style: 4, custom_id: `pmc.severe|${mealRef?.timestampISO||''}`, label: 'Severe' },
+            ]
+        }]
+    });
+    // keep pending; user will press a button
 }
 
 async function logSymptomForMeal(userId, symptomType, severity, mealRefString, deps) {
@@ -557,17 +568,16 @@ module.exports = async function handleMessage(message, deps) {
     }
 
     // Short-circuit post-meal checks BEFORE any NLU/clarify
-    const key = deps.keyFrom(message);
-    const p = await deps.getSoft(key); // soft extend TTL
-    console.log(`[POST_MEAL_CHECK] Key: ${key}, Pending: ${JSON.stringify(p)}`);
-    if (p?.type?.startsWith('post_meal_check')) {
-        console.log(`[POST_MEAL_CHECK] Handling post-meal check for user ${userId}.`);
-        await handlePostMealCheck(message, p, deps);
-        return; // DO NOT fall through
+    const ctx = { guildId: message.guildId || 'dm', channelId: message.channelId, authorId: message.author.id };
+    const key = deps.keyFrom(ctx);
+    const pend = deps.getSoft(key);        // << soft extend
+    if (pend?.type === 'post_meal_check') {
+        await handlePostMealCheck(message, pend, deps);
+        return; // DO NOT fall through to NLU
     }
 
-    // Store p for later use in guards
-    const pendingContext = p;
+    // Store pend for later use in guards
+    const pendingContext = pend;
 
     if (deps.shouldEnableCalorieFeatures(userId)) {
         const complexIntent = deps.parseComplexIntent(text);

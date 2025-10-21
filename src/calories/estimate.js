@@ -1,4 +1,4 @@
-/**
+YAY/**
  * Fast Calorie Estimation
  * Deterministic calorie estimation using local lookup table
  */
@@ -213,8 +213,28 @@ function formatDailyProgress(totals, target) {
     return `Today: ${totals.calories.toLocaleString()} / ${target.toLocaleString()} kcal ${status}`;
 }
 
+/**
+ * Calorie estimator hardening — skip junk like "you"
+ * @param {string} item - Food item to estimate
+ * @param {...any} rest - Additional parameters
+ * @returns {Promise<Object|null>} - Estimation result or null if invalid
+ */
+async function estimateCaloriesSafe(item, ...rest) {
+    const txt = (item || '').toLowerCase().trim();
+    if (!txt || txt.length < 3) return null;
+    if (/\b(you|thanks|thank you|ok|okay|fine|solid)\b/.test(txt)) return null; // user replies
+    try {
+        // your normal estimator (LUT/index/etc.)
+        return await estimate({ item, ...rest });
+    } catch (e) {
+        console.warn('[CAL-EST] guarded fail for', JSON.stringify(item), e?.message || e);
+        return null;
+    }
+}
+
 module.exports = {
     estimate,
+    estimateCaloriesSafe,
     getDailyKcalTarget,
     calculateDailyTotals,
     formatDailyProgress
