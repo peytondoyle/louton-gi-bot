@@ -1,4 +1,4 @@
-YAY/**
+/**
  * Fast Calorie Estimation
  * Deterministic calorie estimation using local lookup table
  */
