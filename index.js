@@ -224,8 +224,7 @@ client.on('ready', async () => {
     console.log('✅ Daily digests registered');
     
     // Start proactive scheduler
-    const proactiveScheduler = new ProactiveScheduler(client, googleSheets);
-    proactiveScheduler.start();
+    ProactiveScheduler.start(client, { googleSheets, getUserProfile });
     console.log('✅ Proactive scheduler started');
     
     console.log('🎉 Bot is fully operational!');
