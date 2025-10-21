@@ -460,29 +460,40 @@ async function handlePostMealCheck(message, pendingCheck, deps) {
     const text = message.content.trim();
     const userId = message.author.id;
   
-    const positive = /\b(solid|all good|pretty good|good|great|fine|ok|okay|no issues|felt fine)\b/i.test(text);
-    const neg = text.match(/\b(reflux|heartburn|nausea|bloat(?:ed|ing)?|gas(?:sy)?|cramp(?:s|ing)?|pain|burning|regurgitation)\b/i);
+    // Enhanced polarity detection
+    const POS = /\b(solid|all good|pretty good|good|great|fine|ok|okay|no issues|felt fine|nope|none)\b/i;
+    const NEG = /\b(reflux|heartburn|nausea|bloat(?:ed|ing)?|gas(?:sy)?|cramp(?:s|ing)?|pain|burning|regurgitation)\b/i;
     const sevWord = (text.match(/\b(mild|moderate|severe)\b/i) || [])[1];
     const sevNum = (text.match(/\b([1-9]|10)\b/) || [])[1];
   
-    if (positive && !neg) {
-      try { if (mealRef) await deps.updateMealNotes(deps.googleSheets, mealRef, ["after_effect=ok"]); }
-      catch (e) { console.warn("[POST_MEAL_CHECK] notes append failed:", e); }
-      await message.reply({ content: "Got it — no symptoms. ✅" });
-      await deps.clear(deps.keyFrom(message));
-      return;
+    if (POS.test(text) && !NEG.test(text)) {
+        try { 
+            if (mealRef) await deps.updateMealNotes(deps.googleSheets, mealRef, ["after_effect=ok"]); 
+        } catch (e) { 
+            console.warn("[POST_MEAL_CHECK] notes append failed:", e); 
+        }
+        await message.reply('Got it — no symptoms. ✅');
+        await deps.clear(deps.keyFrom(message));
+        return;
     }
   
-    if (neg && (sevNum || sevWord)) {
-      const severity = sevNum ? Number(sevNum) : ({ mild:3, moderate:6, severe:9 }[sevWord.toLowerCase()] || 5);
-      await logSymptomForMeal(userId, neg[1].toLowerCase(), severity, mealRef ? `${mealRef.tab}:${mealRef.rowId}` : null, deps); // Pass mealRef string and deps
-      await message.reply({ content: `Logged ${neg[1]} (severity ${severity}).` });
-      await deps.clear(deps.keyFrom(message));
-      return;
+    if (NEG.test(text) && (sevNum || sevWord)) {
+        const negMatch = text.match(NEG);
+        const severity = sevNum ? Number(sevNum) : ({ mild:3, moderate:6, severe:9 }[sevWord.toLowerCase()] || 5);
+        await logSymptomForMeal(userId, negMatch[1].toLowerCase(), severity, mealRef ? `${mealRef.tab}:${mealRef.rowId}` : null, deps);
+        await message.reply({ content: `Logged ${negMatch[1]} (severity ${severity}).` });
+        await deps.clear(deps.keyFrom(message));
+        return;
     }
   
-    await message.reply({ content: "Any symptoms to log?", components: [deps.buildSeverityButtons()] });
-    await deps.set(deps.keyFrom(message), { type: 'post_meal_check_wait_severity', ...pendingCheck, createdAt: Date.now() }, 120);
+    // Only show severity buttons if NEG detected but no severity provided
+    if (NEG.test(text)) {
+        await message.reply({ content: "Any symptoms to log?", components: [deps.buildSeverityButtons()] });
+        await deps.set(deps.keyFrom(message), { type: 'post_meal_check_wait_severity', ...pendingCheck, createdAt: Date.now() }, 120);
+    } else {
+        // No clear positive or negative - show generic follow-up
+        await message.reply({ content: "How are you feeling after that meal?" });
+    }
 }
 
 async function logSymptomForMeal(userId, symptomType, severity, mealRefString, deps) {
@@ -545,16 +556,13 @@ module.exports = async function handleMessage(message, deps) {
         return;
     }
 
-    const pendingCheck = await deps.get(deps.keyFrom(message));
-    if (pendingCheck && (pendingCheck.type === 'post_meal_check' || pendingCheck.type === 'post_meal_check_wait_severity')) {
-        if (pendingCheck.expiresAt && pendingCheck.expiresAt < Date.now()) {
-            console.log(`[POST_MEAL_CHECK] Pending context expired for user ${userId}. Clearing and proceeding with normal NLU.`);
-            await deps.clear(deps.keyFrom(message));
-        } else {
-            console.log(`[POST_MEAL_CHECK] Handling message for pending post-meal check for user ${userId}.`);
-            await handlePostMealCheck(message, pendingCheck, deps);
-            return;
-        }
+    // Short-circuit post-meal checks BEFORE any NLU/clarify
+    const key = deps.keyFrom(message);
+    const p = await deps.getSoft(key); // soft extend TTL
+    if (p?.type?.startsWith('post_meal_check')) {
+        console.log(`[POST_MEAL_CHECK] Handling post-meal check for user ${userId}.`);
+        await handlePostMealCheck(message, p, deps);
+        return; // DO NOT fall through
     }
 
     if (deps.shouldEnableCalorieFeatures(userId)) {
@@ -657,7 +665,10 @@ module.exports = async function handleMessage(message, deps) {
         }
 
         if ((LOGGABLE_INTENTS.includes(result.intent) && result.confidence < 0.65) || result.intent === 'other') {
-            await requestIntentClarification(message, deps);
+            // Guard: only clarify if no pending flow matched
+            if (!p?.type?.startsWith('post_meal_check')) {
+                await requestIntentClarification(message, deps);
+            }
             return;
         }
 
@@ -667,7 +678,10 @@ module.exports = async function handleMessage(message, deps) {
                 await deps.DialogManager.startDialog('symptom_log', message, initialContext);
                 return;
             }
-            await requestIntentClarification(message, deps);
+            // Guard: only clarify if no pending flow matched
+            if (!p?.type?.startsWith('post_meal_check')) {
+                await requestIntentClarification(message, deps);
+            }
             return;
         }
 

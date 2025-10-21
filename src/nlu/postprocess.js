@@ -22,7 +22,7 @@ function postprocess(result) {
     
     // Normalize sides tokens
     if (normalized.slots.sides) {
-        normalized.slots.sides = normalizeSidesToken(normalized.slots.sides);
+        normalized.slots.sides = normalizeSides(normalized.slots.sides);
     }
     
     // Normalize symptom tokens
@@ -101,6 +101,36 @@ function normalizeSidesToken(sides) {
     }
     
     return normalized || sides;
+}
+
+/**
+ * Canonicalize and deduplicate sides
+ * @param {string} csv - Comma-separated sides string
+ * @returns {string} - Canonicalized and deduplicated sides
+ */
+function normalizeSides(csv) {
+    if (!csv || typeof csv !== 'string') return csv;
+    
+    const ALIASES = { 
+        'blueberries': 'blueberry', 
+        'blueberrie': 'blueberry', 
+        'strawberries': 'strawberry' 
+    };
+    
+    function canon(s) {
+        const t = s.toLowerCase().trim();
+        return ALIASES[t] || t;
+    }
+    
+    const uniq = new Set();
+    for (const raw of csv.split(',')) {
+        const c = canon(raw);
+        if (!c) continue;
+        // drop trivial fragments if a longer phrase already exists (milk vs almond milk)
+        const exists = [...uniq].some(u => u.includes(c) || c.includes(u));
+        if (!exists) uniq.add(c);
+    }
+    return [...uniq].join(', ');
 }
 
 /**
@@ -280,6 +310,7 @@ module.exports = {
     postprocess,
     normalizeItemToken,
     normalizeSidesToken,
+    normalizeSides,
     normalizeSymptomToken,
     normalizeMealTime,
     reorderSlots,

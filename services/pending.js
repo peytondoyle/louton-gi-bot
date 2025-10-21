@@ -48,6 +48,40 @@ async function get(key) {
 }
 
 /**
+ * Soft-extend read that extends TTL if near expiry
+ * @param {string} key - The key for the pending context.
+ * @param {number} minMs - Minimum milliseconds remaining before extending (default: 10,000)
+ * @param {number} extendMs - Milliseconds to extend by (default: 60,000)
+ * @returns {Promise<object|null>} The pending context payload or null if not found or expired.
+ */
+async function getSoft(key, minMs = 10_000, extendMs = 60_000) {
+    try {
+        const record = await sqlite.get(key);
+        if (!record) return null;
+        
+        const now = Date.now();
+        if (record.expiresAt && now > record.expiresAt) {
+            console.log('[PENDING] Context expired, cleaning up:', key);
+            await clear(key);
+            return null;
+        }
+        
+        // Soft extend if near expiry
+        if (record.expiresAt && (record.expiresAt - now) < minMs) {
+            record.expiresAt += extendMs;
+            console.log(`[PENDING] Soft-extended TTL for key: ${key}, new expiry: ${new Date(record.expiresAt).toISOString()}`);
+            // Update the record in storage
+            await sqlite.set(key, record, Math.floor((record.expiresAt - now) / 1000));
+        }
+        
+        return record.payload || record;
+    } catch (error) {
+        console.error('[PENDING] Error in getSoft:', error);
+        return null;
+    }
+}
+
+/**
  * Sets or updates a pending context.
  * @param {string} key - The key for the pending context.
  * @param {object} payload - The data to store for the pending context.
@@ -130,6 +164,7 @@ function getTimeRemaining(context) {
 module.exports = {
     keyFrom,
     get,
+    getSoft,
     set,
     clear,
     isExpired,

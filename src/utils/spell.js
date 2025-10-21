@@ -202,12 +202,28 @@ function safeCorrectToken(token, context = {}) {
     return correction;
 }
 
+/**
+ * Safe correction that prevents noun expansion
+ * Never expands single tokens into multi-word phrases
+ * @param {string} token - Word to potentially correct
+ * @param {string} suggestion - Suggested correction
+ * @returns {string} - Original or corrected token
+ */
+function safeCorrect(token, suggestion) {
+    const DO_NOT_TOUCH = new Set(['poop','bm','bristol']); // never change
+    if (DO_NOT_TOUCH.has(token)) return token;
+    // if the suggestion contains whitespace, keep the original token
+    if (suggestion && /\s/.test(suggestion)) return token;
+    return suggestion || token;
+}
+
 module.exports = {
     jaroWinkler,
     findClosestMatch,
     correctTokens,
     areSimilar,
     safeCorrectToken,  // V2: Domain-aware correction
+    safeCorrect,       // V3: Prevents noun expansion
     BM_PROTECTED,
     SPELL_DENY
 };
