@@ -111,7 +111,7 @@ const RESPONSES = {
 };
 
 // Helper to encapsulate all dependencies for message handling
-const { keyFrom, get, set, clear } = require('./services/pending');
+const { keyFrom, get, getSoft, set, clear } = require('./services/pending');
 
 function makeDependencies() {
     return {
@@ -171,6 +171,7 @@ function makeDependencies() {
         // Pending context
         keyFrom,
         get,
+        getSoft,
         set,
         clear,
 
