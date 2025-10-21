@@ -205,6 +205,70 @@ function makeDependencies() {
     };
 }
 
+// Event handlers
+client.on('ready', async () => {
+    console.log(`✅ Bot logged in as ${client.user.tag}!`);
+    console.log(`✅ Bot ID: ${client.user.id}`);
+    console.log(`✅ Servers: ${client.guilds.cache.size}`);
+    
+    // Initialize services
+    await googleSheets.initialize();
+    console.log('✅ Google Sheets initialized');
+    
+    // Start job runner
+    startJobRunner();
+    console.log('✅ Job runner started');
+    
+    // Register digests
+    digests.registerDigests(client, googleSheets);
+    console.log('✅ Daily digests registered');
+    
+    // Start proactive scheduler
+    const proactiveScheduler = new ProactiveScheduler(client, googleSheets);
+    proactiveScheduler.start();
+    console.log('✅ Proactive scheduler started');
+    
+    console.log('🎉 Bot is fully operational!');
+});
+
+client.on('messageCreate', async (message) => {
+    // Ignore bot messages
+    if (message.author.bot) return;
+    
+    // Check for duplicate messages
+    if (recentMessageIds.has(message.id)) return;
+    recentMessageIds.add(message.id);
+    
+    // Clean up old message IDs
+    if (recentMessageIds.size > 1000) {
+        recentMessageIds.clear();
+    }
+    
+    try {
+        const deps = makeDependencies();
+        await handleMessage(message, deps);
+    } catch (error) {
+        console.error('❌ Error handling message:', error);
+    }
+});
+
+client.on('interactionCreate', async (interaction) => {
+    if (interaction.isButton()) {
+        try {
+            const deps = makeDependencies();
+            await buttonHandlers.handleButtonInteraction(interaction, deps.googleSheets, deps.digests);
+        } catch (error) {
+            console.error('❌ Error handling button interaction:', error);
+        }
+    }
+});
+
+// Start the bot
+client.login(DISCORD_TOKEN).catch(error => {
+    console.error('❌ Failed to login to Discord:', error);
+    process.exit(1);
+});
+
 module.exports = {
     makeDependencies
 };
