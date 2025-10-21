@@ -1,3 +1,10 @@
-run = "npm start"
+run = "node index.js"
+entrypoint = "index.js"
 language = "nodejs"
-hidden = [".env", ".data", "node_modules"]
+modules = ["nodejs-18"]
+
+[nix]
+channel = "stable-22_11"
+
+[deployment]
+run = ["sh", "-c", "node index.js"]
