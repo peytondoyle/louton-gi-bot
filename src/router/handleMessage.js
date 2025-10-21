@@ -380,98 +380,104 @@ async function postLogActions(message, parseResult, undoId, caloriesVal, rowObj,
     const userId = message.author.id;
     const isPeyton = (userId === deps.PEYTON_ID);
 
-    try {
-        let confirmText = '';
-        const emoji = getTypeEmoji(intent, deps);
-        const details = (parseResult.slots.item || parseResult.slots.symptom_type || intent).trim();
-
-        if (intent === 'food' || intent === 'drink') {
-            if (deps.shouldEnableCalorieFeatures(userId) && caloriesVal != null && caloriesVal > 0) {
-                confirmText = `✅ Logged **${details}** — ≈${caloriesVal} kcal.`;
-                try {
-                    const sheetName = deps.googleSheets.getLogSheetNameForUser(userId);
-                    const todayEntries = await deps.googleSheets.getTodayEntries(null, sheetName);
-                    const totals = deps.calculateDailyTotals(todayEntries.rows || []);
-                    const target = await deps.getDailyKcalTarget(userId, deps.userGoals, deps.googleSheets);
-                    const progress = deps.formatDailyProgress(totals, target);
-                    confirmText += `\n\n📊 ${progress}`;
-                } catch (e) {
-                    console.warn('[postLogActions] Error calculating daily progress:', e.message);
-                }
-            } else {
-                confirmText = `✅ Logged **${details}**.`;
-            }
-        } else {
-            confirmText = `${emoji} Logged **${details}**.`;
-        }
-
-        const chips = deps.buildPostLogChips({ undoId, intent });
-        await message.reply({ content: confirmText, components: chips });
-    } catch (e) {
-        console.error('[postLogActions] Error sending success message:', e);
-    }
+    // ========== 1. SEND SUCCESS MESSAGE (Critical - must not throw) ==========
+    let confirmText = '';
+    const emoji = getTypeEmoji(intent, deps);
+    const details = (parseResult.slots.item || parseResult.slots.symptom_type || intent).trim();
 
     if (intent === 'food' || intent === 'drink') {
+        if (deps.shouldEnableCalorieFeatures(userId) && caloriesVal != null && caloriesVal > 0) {
+            confirmText = `✅ Logged **${details}** — ≈${caloriesVal} kcal.`;
+            try {
+                const sheetName = deps.googleSheets.getLogSheetNameForUser(userId);
+                const todayEntries = await deps.googleSheets.getTodayEntries(null, sheetName);
+                const totals = deps.calculateDailyTotals(todayEntries.rows || []);
+                const target = await deps.getDailyKcalTarget(userId, deps.userGoals, deps.googleSheets);
+                const progress = deps.formatDailyProgress(totals, target);
+                confirmText += `\n\n📊 ${progress}`;
+            } catch (e) {
+                console.warn('[postLogActions] Error calculating daily progress (non-critical):', e.message);
+            }
+        } else {
+            confirmText = `✅ Logged **${details}**.`;
+        }
+    } else {
+        confirmText = `${emoji} Logged **${details}**.`;
+    }
+
+    // Send success message with chips - wrapped to prevent throw
+    try {
+        const chips = deps.buildPostLogChips({ undoId, intent });
+        await message.reply({ content: confirmText, components: chips });
+        console.log('[UI] ✅ Success message sent with chips');
+    } catch (chipError) {
+        console.warn('[UI] Chips failed, sending plain success:', chipError.message);
         try {
-            const [sheetName, rowIndexStr] = undoId.split(':');
-            const rowId = parseInt(rowIndexStr, 10);
-            const userTabName = sheetName;
-
-            const ctx = { guildId: message.guildId || 'dm', channelId: message.channelId, authorId: message.author.id };
-            const key = deps.keyFrom(ctx);
-            const mealRef = {
-                tab: userTabName,
-                rowId: rowId,
-                timestampISO: rowObj.Timestamp,
-                item: rowObj.Item
-            };
-            deps.set(key, {
-                type: 'post_meal_check',
-                mealRef
-            }, 120_000);
-
-            // Buttons are optional; simple question is fine
-            await message.reply({
-                content: 'How are you feeling after that?',
-                components: [{
-                    type: 1,
-                    components: [
-                        { type: 2, style: 2, custom_id: `pmc.none|${mealRef.timestampISO}`, label: 'None' },
-                        { type: 2, style: 1, custom_id: `pmc.mild|${mealRef.timestampISO}`, label: 'Mild' },
-                        { type: 2, style: 1, custom_id: `pmc.moderate|${mealRef.timestampISO}`, label: 'Moderate' },
-                        { type: 2, style: 4, custom_id: `pmc.severe|${mealRef.timestampISO}`, label: 'Severe' },
-                    ]
-                }]
-            }).catch(e => { console.warn('[postLogActions] follow-up send failed', e); deps.clear(key); });
-        } catch (e) {
-            console.warn('[postLogActions] Error sending follow-up question:', e.message);
+            await message.reply({ content: confirmText });
+            console.log('[UI] ✅ Success message sent (plain)');
+        } catch (plainError) {
+            console.error('[UI] Failed to send any success message:', plainError);
+            // Continue - save already succeeded
         }
     }
 
-    setImmediate(() => {
-        try {
-            // contextMemory.push(userId, { // DEPRECATED
-            //     type: intent,
-            //     details: slots.item || slots.symptom_type || intent,
-            //     severity: slots.severity ? mapSeverityToLabel(slots.severity) : '',
-            //     timestamp: Date.now()
-            // });
-            if (intent === 'symptom' || intent === 'reflux') {
-                deps.scheduleSymptomFollowup(userId).catch(e => console.warn('[POSTSAVE][warn] followup:', e.message));
+    // ========== 2. BACKGROUND TASKS (Fire-and-forget) ==========
+    // All followup actions wrapped - cannot throw upward
+
+    // Post-meal check (food/drink only)
+    if (intent === 'food' || intent === 'drink') {
+        (async () => {
+            try {
+                const [sheetName, rowIndexStr] = undoId.split(':');
+                const rowId = parseInt(rowIndexStr, 10);
+
+                const ctx = { guildId: message.guildId || 'dm', channelId: message.channelId, authorId: message.author.id };
+                const key = deps.keyFrom(ctx);
+                const mealRef = {
+                    tab: sheetName,
+                    rowId: rowId,
+                    timestampISO: rowObj.Timestamp,
+                    item: rowObj.Item
+                };
+
+                deps.set(key, { type: 'post_meal_check', mealRef }, 120_000);
+
+                await message.reply({
+                    content: 'How are you feeling after that?',
+                    components: [{
+                        type: 1,
+                        components: [
+                            { type: 2, style: 2, custom_id: `pmc.none|${mealRef.timestampISO}`, label: 'None' },
+                            { type: 2, style: 1, custom_id: `pmc.mild|${mealRef.timestampISO}`, label: 'Mild' },
+                            { type: 2, style: 1, custom_id: `pmc.moderate|${mealRef.timestampISO}`, label: 'Moderate' },
+                            { type: 2, style: 4, custom_id: `pmc.severe|${mealRef.timestampISO}`, label: 'Severe' },
+                        ]
+                    }]
+                });
+            } catch (e) {
+                console.warn('[POSTSAVE] Post-meal check failed:', e.message);
             }
-            if (parseResult.multi_actions && parseResult.multi_actions.length > 0) {
-                for (const action of parseResult.multi_actions) {
-                    delete action.multi_actions;
-                    setTimeout(() => {
-                        logFromNLU(message, action, deps).catch(e => console.error('[Multi-Action] Error logging sub-action:', e));
-                    }, 500);
-                }
-            }
-            // Background tasks dispatched
-        } catch(e) {
-            console.error('[postLogActions] Error in background tasks:', e);
+        })();
+    }
+
+    // Symptom followups
+    if (intent === 'symptom' || intent === 'reflux') {
+        deps.scheduleSymptomFollowup(userId)
+            .catch(e => console.warn('[POSTSAVE] Symptom followup failed:', e.message));
+    }
+
+    // Multi-actions (if LLM returned multiple intents)
+    if (parseResult.multi_actions && parseResult.multi_actions.length > 0) {
+        for (const action of parseResult.multi_actions) {
+            delete action.multi_actions;
+            setTimeout(() => {
+                logFromNLU(message, action, deps)
+                    .catch(e => console.error('[Multi-Action] Sub-action failed:', e));
+            }, 500);
         }
-    });
+    }
+
+    console.log('[SAVE] ✅ Post-log background tasks dispatched');
 }
 
 async function handlePostMealCheck(message, pendingCheck, deps) {
@@ -730,7 +736,11 @@ module.exports = async function handleMessage(message, deps) {
             saveSucceeded = logResult.success;
 
             if (saveSucceeded) {
-                await postLogActions(message, result, logResult.undoId, logResult.caloriesVal, logResult.rowObj, deps);
+                // Spawn post-log actions in background - NEVER await (can't throw upward)
+                setImmediate(() => {
+                    postLogActions(message, result, logResult.undoId, logResult.caloriesVal, logResult.rowObj, deps)
+                        .catch(e => console.warn('[POSTSAVE] Post-log actions failed (save succeeded):', e.message));
+                });
             }
         } else {
             await requestMissingSlots(message, result, deps);
@@ -748,4 +758,5 @@ module.exports = async function handleMessage(message, deps) {
             console.warn('[NLU] Error after successful save (not shown to user):', error.message);
         }
     }
+    // Never throw from this function
 };
