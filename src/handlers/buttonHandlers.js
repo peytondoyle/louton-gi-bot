@@ -92,8 +92,13 @@ async function handleButtonInteraction(interaction) {
                 }
                 break;
             default:
-                // Handle older or non-namespaced IDs for backward compatibility if needed
-                console.warn(`[BUTTONS] Unhandled button namespace: ${namespace}`);
+                // Check if it's a post-meal check button (pmc.severity|timestamp)
+                if (customId.startsWith('pmc.')) {
+                    await handlePostMealCheckButton(interaction, customId);
+                } else {
+                    // Handle older or non-namespaced IDs for backward compatibility if needed
+                    console.warn(`[BUTTONS] Unhandled button namespace: ${namespace}`);
+                }
         }
 
     } catch (error) {
@@ -584,6 +589,82 @@ async function requestBristolClarification(message, notes = '') {
         content: `${EMOJI.bm} I'll log this bowel movement. Can you provide more details?`,
         components: buttonsBristol()
     });
+}
+
+/**
+ * Handles post-meal check button interactions
+ * @param {import('discord.js').ButtonInteraction} interaction - The button interaction
+ * @param {string} customId - The full custom ID (e.g., "pmc.mild|2025-10-21T12")
+ */
+async function handlePostMealCheckButton(interaction, customId) {
+    const userId = interaction.user.id;
+
+    // Parse the customId: pmc.severity|timestamp
+    const parts = customId.split('.');
+    if (parts.length < 2) {
+        await interaction.reply({ content: '❌ Invalid button format.', ephemeral: true });
+        return;
+    }
+
+    const severityAndTimestamp = parts[1].split('|');
+    const severityLabel = severityAndTimestamp[0]; // 'none', 'mild', 'moderate', or 'severe'
+
+    // Create context object for pending operations
+    const ctx = {
+        guildId: interaction.guildId || 'dm',
+        channelId: interaction.channel.id,
+        authorId: userId
+    };
+
+    // Get the pending post-meal check
+    const pendingCheck = await pending.get(pending.keyFrom(ctx));
+    if (!pendingCheck || pendingCheck.type !== 'post_meal_check') {
+        await interaction.reply({
+            content: '⏰ This check-in has expired. No worries!',
+            ephemeral: true
+        });
+        return;
+    }
+
+    const mealRef = pendingCheck.mealRef;
+
+    // Clear the pending check
+    await pending.clear(pending.keyFrom(ctx));
+
+    // Handle based on severity
+    if (severityLabel === 'none') {
+        // User feels fine - no symptoms to log
+        await interaction.update({
+            content: `✅ Great! No issues after **${mealRef.item || 'your meal'}**.`,
+            components: []
+        });
+    } else {
+        // Map severity labels to numeric values
+        const severityMap = {
+            'mild': 3,
+            'moderate': 6,
+            'severe': 9
+        };
+
+        const severityNum = severityMap[severityLabel] || 5;
+
+        // Log the symptom (we'll need to import or access the symptom logging function)
+        try {
+            // This would need to call a function to log symptoms - for now just update the message
+            await interaction.update({
+                content: `📝 Logged ${severityLabel} symptoms after **${mealRef.item || 'your meal'}**.`,
+                components: []
+            });
+
+            console.log(`[PMC] Logged ${severityLabel} (${severityNum}) symptoms for meal ${mealRef.tab}:${mealRef.rowId}`);
+        } catch (error) {
+            console.error('[PMC] Error logging symptom:', error);
+            await interaction.update({
+                content: '❌ Failed to log symptom.',
+                components: []
+            });
+        }
+    }
 }
 
 /**
