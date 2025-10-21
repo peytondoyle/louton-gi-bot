@@ -48,7 +48,7 @@ const {
     isMinimalCoreFood
 } = require('./ontology-v2');
 
-const { safeCorrectToken, correctTokens } = require('../utils/spell');
+const { safeCorrectToken, correctTokens, safeCorrect } = require('../utils/spell');
 const { extractPortion } = require('../nutrition/portionParser');
 const { EMOJI, PHRASES } = require('../constants/ux');
 const { getMealTime, getSeverity, getBristol, normalizeItem } = require('./ontology');
@@ -126,20 +126,32 @@ function rulesParse(text, options = {}) {
     }
 
     // ========== 1. PRE-CLEAN (Only for non-BM domains) ==========
-    // Spell correction for known brands/foods
+    // Spell correction for known brands/foods with noun expansion prevention
     const spellingResult = correctTokens(originalText, {
         brands: CEREAL_BRANDS,
         foods: MINIMAL_CORE_FOODS,
         beverages: ALL_BEVERAGES
     });
 
+    // Apply safe correction to prevent noun expansion
+    const words = spellingResult.corrected.split(/\s+/);
+    const safeCorrectedWords = words.map(word => {
+        // Find the original correction for this word
+        const correction = spellingResult.corrections.find(c => c.original === word);
+        if (correction) {
+            // Use safeCorrect to prevent multi-word expansions
+            return safeCorrect(word, correction.corrected);
+        }
+        return word;
+    });
+
+    const cleanedText = safeCorrectedWords.join(' ');
+    const cleanedLower = cleanedText.toLowerCase();
+
     if (spellingResult.corrections.length > 0) {
         result.meta.spellingCorrected = spellingResult.corrections;
         console.log(`[NLU-V2] Spell corrected:`, spellingResult.corrections);
     }
-
-    const cleanedText = spellingResult.corrected;
-    const cleanedLower = cleanedText.toLowerCase();
 
     // ========== 2. CONVERSATIONAL INTENTS (Early Exit) ==========
 
