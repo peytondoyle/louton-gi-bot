@@ -292,9 +292,22 @@ function getActiveCount() {
     return tasks.size;
 }
 
+/**
+ * Schedule symptom follow-up (placeholder for now)
+ * @param {string} userId - Discord user ID
+ * @returns {Promise<void>}
+ */
+async function scheduleSymptomFollowup(userId) {
+    // Placeholder: Symptom follow-ups are currently handled in contextualFollowups.js
+    // This function exists to prevent errors but doesn't do anything yet
+    console.log(`[REMINDER] Symptom follow-up scheduled for user ${userId} (placeholder)`);
+    return Promise.resolve();
+}
+
 module.exports = {
     scheduleAll,
     updateUserSchedule,
     scheduleForUser,
-    getActiveCount
+    getActiveCount,
+    scheduleSymptomFollowup
 };
