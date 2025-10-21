@@ -33,9 +33,7 @@ const { markInteracted, isUnderWatch } = require('./src/reminders/responseWatche
 
 const handleMessage = require('./src/router/handleMessage');
 
-const { assertNotLoaded } = require('./src/boot/deprecationCheck');
-assertNotLoaded('pendingClarifications', require('./src/handlers/uxButtons.js'));
-assertNotLoaded('pendingClarifications', require('./src/handlers/buttonHandlers.js'));
+// Deprecation checks removed - use services/pending.js instead
 
 const { startHeartbeat } = require('./src/health/heartbeat');
 const { recordNLUParse } = require('./src/commands/nluStats');
