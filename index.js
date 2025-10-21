@@ -137,6 +137,7 @@ function makeDependencies() {
         postprocess: require('./src/nlu/postprocess').postprocess,
         recordNLUMetrics: require('./src/nlu/metrics-v2').record,
         recordNLUParse: require('./src/commands/nluStats').recordNLUParse,
+        extractMetadata: require('./src/nlu/rules').extractMetadata,
         shouldEnableCalorieFeatures: require('./src/auth/scope').shouldEnableCalorieFeatures,
         parseComplexIntent: require('./src/nlu/rulesIntent').parseComplexIntent,
 
@@ -163,6 +164,8 @@ function makeDependencies() {
         buttonsIntentClarification: require('./src/ui/components').buttonsIntentClarification,
         buildConversationalHelp: require('./src/ui/components').buildConversationalHelp,
         buildPostLogChips: require('./src/ui/chips').buildPostLogChips,
+
+        logFromNLU: require('./src/router/handleMessage').logFromNLU, // Expose logFromNLU for internal use / testing
 
         // Pending context
         keyFrom,
