@@ -88,15 +88,42 @@ async function rollupUserDay(googleSheets, userId, prefs) {
 
     console.log(`[ROLLUP] ${sheetName} ${yesterday}: ${totals.totalLogs} logs, ${totals.totalCalories} kcal, ${totals.refluxLogs} reflux`);
 
-    // TODO: Write to DailyRollups tab when created
-    // For now, just log the aggregates
-    // await googleSheets.appendRowToSheet('Daily_Peyton', {
-    //     Date: yesterday,
-    //     TotalLogs: totals.totalLogs,
-    //     Calories: totals.totalCalories,
-    //     Reflux: totals.refluxLogs,
-    //     AvgSeverity: totals.avgRefluxSeverity
-    // });
+    // Write to DailyRollups tab
+    try {
+        const rollupSheetName = `DailyRollups_${sheetName}`;
+        
+        // Ensure the rollup sheet exists with proper headers
+        await googleSheets.ensureSheetAndHeaders(rollupSheetName, [
+            'Date',
+            'UserId', 
+            'TotalLogs',
+            'FoodLogs',
+            'DrinkLogs', 
+            'SymptomLogs',
+            'RefluxLogs',
+            'BMLogs',
+            'TotalCalories',
+            'AvgRefluxSeverity'
+        ]);
+        
+        // Write the rollup data
+        await googleSheets.appendRowToSheet(rollupSheetName, {
+            Date: yesterday,
+            UserId: userId,
+            TotalLogs: totals.totalLogs,
+            FoodLogs: totals.foodLogs,
+            DrinkLogs: totals.drinkLogs,
+            SymptomLogs: totals.symptomLogs,
+            RefluxLogs: totals.refluxLogs,
+            BMLogs: totals.bmLogs,
+            TotalCalories: totals.totalCalories,
+            AvgRefluxSeverity: totals.avgRefluxSeverity
+        });
+        
+        console.log(`[ROLLUP] ✅ Wrote rollup data to ${rollupSheetName}`);
+    } catch (error) {
+        console.error(`[ROLLUP] ❌ Failed to write rollup data for ${userId}:`, error.message);
+    }
 }
 
 /**

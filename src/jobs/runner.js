@@ -82,7 +82,69 @@ async function sendAfterMealDM(job, client) {
     } catch (error) {
         if (error.code === 50007) { // Cannot send messages to this user
             console.log(`[JOBS] Cannot send DM to user ${userId} - DMs may be disabled`);
-            // TODO: Fall back to channel notification
+            
+            // Fall back to channel notification
+            try {
+                const channelId = process.env.DISCORD_CHANNEL_ID;
+                if (channelId) {
+                    const channel = await client.channels.fetch(channelId);
+                    if (channel) {
+                        const fallbackEmbed = {
+                            title: "🍽️ Calorie Reminder",
+                            description: `<@${userId}> Want to add calories for **${payload.item}** from ${payload.mealType}?`,
+                            color: 0x57F287, // Green
+                            fields: [
+                                {
+                                    name: "Options",
+                                    value: "• **+Estimate** - I'll estimate calories\n• **Enter Calories** - Manual entry\n• **Skip** - No calories needed",
+                                    inline: false
+                                }
+                            ],
+                            footer: {
+                                text: "This helps track your daily nutrition goals"
+                            }
+                        };
+                        
+                        const fallbackComponents = [
+                            {
+                                type: 1, // ActionRow
+                                components: [
+                                    {
+                                        type: 2, // Button
+                                        style: 1, // Primary
+                                        label: "+Estimate",
+                                        custom_id: `calorie:estimate:${job.id}`,
+                                        emoji: { name: "🧮" }
+                                    },
+                                    {
+                                        type: 2, // Button
+                                        style: 2, // Secondary
+                                        label: "Enter Calories",
+                                        custom_id: `calorie:manual:${job.id}`,
+                                        emoji: { name: "✏️" }
+                                    },
+                                    {
+                                        type: 2, // Button
+                                        style: 3, // Success
+                                        label: "Skip",
+                                        custom_id: `calorie:skip:${job.id}`,
+                                        emoji: { name: "⏭️" }
+                                    }
+                                ]
+                            }
+                        ];
+                        
+                        await channel.send({ embeds: [fallbackEmbed], components: fallbackComponents });
+                        console.log(`[JOBS] Sent fallback channel notification to user ${userId} for ${payload.item}`);
+                    } else {
+                        console.error(`[JOBS] Channel ${channelId} not found for fallback notification`);
+                    }
+                } else {
+                    console.error(`[JOBS] No DISCORD_CHANNEL_ID configured for fallback notification`);
+                }
+            } catch (fallbackError) {
+                console.error(`[JOBS] Fallback channel notification also failed:`, fallbackError);
+            }
         } else {
             console.error(`[JOBS] Failed to send reminder to user ${userId}:`, error);
         }

@@ -8,6 +8,50 @@ const { parsePortion } = require('../nutrition/portionParser');
 const { findBrandInfo } = require('../nutrition/brandLexicon');
 const { estimateCaloriesForItemAndSides } = require('../nutrition/estimateCalories');
 
+/**
+ * Detect category from row details to show appropriate brand options
+ * @param {string} sheetName - Sheet name
+ * @param {number} rowIndex - Row index
+ * @param {Object} deps - Dependencies
+ * @returns {string} - Detected category
+ */
+async function detectCategoryFromDetails(sheetName, rowIndex, deps) {
+    try {
+        // Get the row data
+        const result = await deps.googleSheets.getRows({}, sheetName);
+        if (!result.success || !result.rows[rowIndex - 2]) {
+            return 'generic';
+        }
+
+        const row = result.rows[rowIndex - 2];
+        const details = (row.Details || row.Item || '').toLowerCase();
+        
+        // Category detection patterns
+        if (details.includes('oat milk') || details.includes('oatmilk') || details.includes('oats')) {
+            return 'oat_milk';
+        }
+        
+        if (details.includes('almond milk') || details.includes('almondmilk')) {
+            return 'almond_milk';
+        }
+        
+        if (details.includes('chai') || details.includes('chai tea') || details.includes('chai latte')) {
+            return 'chai';
+        }
+        
+        if (details.includes('cereal') || details.includes('cheerios') || details.includes('life') || 
+            details.includes('granola') || details.includes('kix') || details.includes('breakfast')) {
+            return 'cereal';
+        }
+        
+        // Default to generic
+        return 'generic';
+    } catch (error) {
+        console.warn('[UX] Error detecting category:', error.message);
+        return 'generic';
+    }
+}
+
 // Import new pending context service
 const pending = require('../../services/pending');
 const TTL_SECONDS = 120; // 2 minutes, matching old PENDING_TTL_MS
@@ -284,7 +328,7 @@ async function handleAddBrand(interaction, deps) {
     await pending.set(pending.keyFrom(interaction), { type: 'brand', data: { sheetName, rowIndex } }, TTL_SECONDS);
 
     // Try to detect category from row details
-    const category = 'generic'; // TODO: could detect from row Details
+    const category = await detectCategoryFromDetails(sheetName, rowIndex, deps);
 
     await interaction.reply({
         content: '🏷️ Select a brand:',

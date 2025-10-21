@@ -110,6 +110,7 @@ async function getUserProfile(userId, googleSheets) {
             knownTriggers: profile.knownTriggers || [],
             safeFoods: profile.safeFoods || [],
             dietaryPreferences: profile.dietaryPreferences || [],
+            dailyGoal: profile.dailyGoal || null, // Daily calorie goal
             prefs: { ...defaultPrefs, ...(profile.prefs || {}) },
         };
 

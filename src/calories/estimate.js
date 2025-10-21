@@ -140,11 +140,30 @@ function estimate({ item, quantity, units }) {
 /**
  * Get daily calorie target for a user
  * @param {string} userId - Discord user ID
+ * @param {Map} userGoals - User goals map (optional, for testing)
+ * @param {Object} googleSheets - Google Sheets service (optional)
  * @returns {Promise<number>} - Daily calorie target
  */
-async function getDailyKcalTarget(userId) {
-    // For now, use environment variable
-    // Later this could be stored in user preferences
+async function getDailyKcalTarget(userId, userGoals = null, googleSheets = null) {
+    // Check if userGoals is provided (from deps)
+    if (userGoals && userGoals.has(userId)) {
+        return userGoals.get(userId);
+    }
+    
+    // Check user profile if googleSheets is provided
+    if (googleSheets) {
+        try {
+            const { getUserProfile } = require('../../services/userProfile');
+            const profile = await getUserProfile(userId, googleSheets);
+            if (profile.dailyGoal) {
+                return profile.dailyGoal;
+            }
+        } catch (e) {
+            console.warn('[getDailyKcalTarget] Error getting profile:', e.message);
+        }
+    }
+    
+    // Fallback to environment variable
     return Number(process.env.PEYTON_KCAL_TARGET || 2300);
 }
 

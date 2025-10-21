@@ -44,6 +44,54 @@ async function handleTest(message, deps) {
     await message.reply('✅ Bot is working! I can receive and respond to your messages.');
 }
 
+async function handleGoal(message, args, deps) {
+    const userId = message.author.id;
+    
+    // Only allow Peyton to set goals
+    if (userId !== deps.PEYTON_ID) {
+        await message.reply('Goal tracking is only enabled for Peyton.');
+        return;
+    }
+    
+    if (!args || args.trim() === '') {
+        // Show current goal
+        try {
+            const profile = await deps.getUserProfile(userId, deps.googleSheets);
+            const currentGoal = profile.dailyGoal || await deps.getDailyKcalTarget(userId);
+            await message.reply(`📊 Your current daily goal is ${currentGoal.toLocaleString()} kcal.\n\nUse \`!goal <number>\` to change it.`);
+        } catch (e) {
+            console.warn('[handleGoal] Error getting current goal:', e.message);
+            await message.reply('❌ Error retrieving your current goal. Please try again.');
+        }
+        return;
+    }
+    
+    const goal = parseInt(args.trim(), 10);
+    if (isNaN(goal) || goal < 1000 || goal > 5000) {
+        await message.reply('❌ Please enter a valid goal between 1000 and 5000 kcal.\n\nExample: `!goal 2200`');
+        return;
+    }
+    
+    try {
+        // Get current profile
+        const profile = await deps.getUserProfile(userId, deps.googleSheets);
+        
+        // Update the daily goal
+        profile.dailyGoal = goal;
+        
+        // Save to persistent storage
+        await deps.updateUserProfile(userId, profile, deps.googleSheets);
+        
+        // Also store in memory for immediate use
+        deps.userGoals.set(userId, goal);
+        
+        await message.reply(`✅ Set your daily goal to ${goal.toLocaleString()} kcal.`);
+    } catch (e) {
+        console.error('[handleGoal] Error setting goal:', e);
+        await message.reply('❌ Error setting your goal. Please try again.');
+    }
+}
+
 async function handleComplexIntent(message, intent, deps) {
     const userId = message.author.id;
     switch (intent.kind) {
@@ -341,9 +389,10 @@ async function postLogActions(message, parseResult, undoId, caloriesVal, rowObj,
             if (deps.shouldEnableCalorieFeatures(userId) && caloriesVal != null && caloriesVal > 0) {
                 confirmText = `✅ Logged **${details}** — ≈${caloriesVal} kcal.`;
                 try {
-                    const todayEntries = await deps.googleSheets.getTodayEntries(userId);
+                    const sheetName = deps.googleSheets.getLogSheetNameForUser(userId);
+                    const todayEntries = await deps.googleSheets.getTodayEntries(null, sheetName);
                     const totals = deps.calculateDailyTotals(todayEntries.rows || []);
-                    const target = await deps.getDailyKcalTarget(userId);
+                    const target = await deps.getDailyKcalTarget(userId, deps.userGoals, deps.googleSheets);
                     const progress = deps.formatDailyProgress(totals, target);
                     confirmText += `\n\n📊 ${progress}`;
                 } catch (e) {

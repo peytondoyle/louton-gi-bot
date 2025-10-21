@@ -18,10 +18,10 @@ const CACHE_TTL_MS = 5 * 60 * 1000;
  * @param {Object} googleSheets - Sheets service
  * @param {string} userName - User name
  * @param {string} sheetName - Sheet name (Peyton/Louis)
- * @param {Object} options - { sinceDays: 30 }
+ * @param {Object} options - { sinceDays: 30, userId: string, getUserProfile: function }
  * @returns {Promise<Array>} - Filtered rows
  */
-async function loadUserRows(googleSheets, userName, sheetName, { sinceDays = 30 } = {}) {
+async function loadUserRows(googleSheets, userName, sheetName, { sinceDays = 30, userId = null, getUserProfile = null } = {}) {
     const cacheKey = `user:${sheetName}:${sinceDays}`;
 
     // Check cache
@@ -42,7 +42,18 @@ async function loadUserRows(googleSheets, userName, sheetName, { sinceDays = 30 
         }
 
         // Filter and transform rows
-        const tz = process.env.TIMEZONE || 'America/Los_Angeles'; // TODO: Use per-user TZ when Phase 1 complete
+        let tz = process.env.TIMEZONE || 'America/Los_Angeles'; // Default fallback
+        
+        // Use per-user timezone if available
+        if (userId && getUserProfile) {
+            try {
+                const profile = await getUserProfile(userId, googleSheets);
+                tz = profile.prefs.TZ || tz;
+            } catch (e) {
+                console.warn(`[INSIGHTS] Failed to get user timezone for ${userId}, using default:`, e.message);
+            }
+        }
+        
         const cutoffDate = moment().tz(tz).subtract(sinceDays, 'days').format('YYYY-MM-DD');
 
         const filtered = result.rows
@@ -84,10 +95,10 @@ async function loadUserRows(googleSheets, userName, sheetName, { sinceDays = 30 
 /**
  * Load Health_Peyton rows with burn calories
  * @param {Object} googleSheets - Sheets service
- * @param {Object} options - { sinceDays: 30 }
+ * @param {Object} options - { sinceDays: 30, userId: string, getUserProfile: function }
  * @returns {Promise<Map>} - Map keyed by Date
  */
-async function loadHealthRows(googleSheets, { sinceDays = 30 } = {}) {
+async function loadHealthRows(googleSheets, { sinceDays = 30, userId = null, getUserProfile = null } = {}) {
     // Feature flag check - return empty if health disabled
     if (!HEALTH_ENABLED) {
         console.log(`[INSIGHTS] Health integration disabled (no burn data available)`);
@@ -114,7 +125,18 @@ async function loadHealthRows(googleSheets, { sinceDays = 30 } = {}) {
         }
 
         // Filter and transform
-        const tz = process.env.TIMEZONE || 'America/Los_Angeles';
+        let tz = process.env.TIMEZONE || 'America/Los_Angeles'; // Default fallback
+        
+        // Use per-user timezone if available
+        if (userId && getUserProfile) {
+            try {
+                const profile = await getUserProfile(userId, googleSheets);
+                tz = profile.prefs.TZ || tz;
+            } catch (e) {
+                console.warn(`[INSIGHTS] Failed to get user timezone for ${userId}, using default:`, e.message);
+            }
+        }
+        
         const cutoffDate = moment().tz(tz).subtract(sinceDays, 'days').format('YYYY-MM-DD');
 
         const healthMap = new Map();
