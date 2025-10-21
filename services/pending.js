@@ -1,10 +1,23 @@
 const store = new Map(); // { key -> { payload, expiresAt } }
 
 function keyFrom(ctx) {
-  // Always use the same shape everywhere
-  const guildId = ctx.guildId || 'dm';
-  const channelId = ctx.channelId;
-  const userId = ctx.authorId || ctx.userId;
+  // Handle both context objects and message objects
+  let guildId, channelId, userId;
+  
+  if (ctx.guildId !== undefined || ctx.channelId !== undefined || ctx.authorId !== undefined) {
+    // Context object format
+    guildId = ctx.guildId || 'dm';
+    channelId = ctx.channelId;
+    userId = ctx.authorId || ctx.userId;
+  } else if (ctx.guild !== undefined || ctx.channel !== undefined || ctx.author !== undefined) {
+    // Message object format
+    guildId = ctx.guild ? ctx.guild.id : 'dm';
+    channelId = ctx.channel.id;
+    userId = ctx.author.id;
+  } else {
+    throw new Error('pending.keyFrom: invalid context format');
+  }
+  
   if (!channelId || !userId) throw new Error('pending.keyFrom: missing ids');
   return `pending:${guildId}:${channelId}:${userId}`;
 }
