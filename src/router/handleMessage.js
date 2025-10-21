@@ -559,11 +559,15 @@ module.exports = async function handleMessage(message, deps) {
     // Short-circuit post-meal checks BEFORE any NLU/clarify
     const key = deps.keyFrom(message);
     const p = await deps.getSoft(key); // soft extend TTL
+    console.log(`[POST_MEAL_CHECK] Key: ${key}, Pending: ${JSON.stringify(p)}`);
     if (p?.type?.startsWith('post_meal_check')) {
         console.log(`[POST_MEAL_CHECK] Handling post-meal check for user ${userId}.`);
         await handlePostMealCheck(message, p, deps);
         return; // DO NOT fall through
     }
+
+    // Store p for later use in guards
+    const pendingContext = p;
 
     if (deps.shouldEnableCalorieFeatures(userId)) {
         const complexIntent = deps.parseComplexIntent(text);
@@ -666,7 +670,7 @@ module.exports = async function handleMessage(message, deps) {
 
         if ((LOGGABLE_INTENTS.includes(result.intent) && result.confidence < 0.65) || result.intent === 'other') {
             // Guard: only clarify if no pending flow matched
-            if (!p?.type?.startsWith('post_meal_check')) {
+            if (!pendingContext?.type?.startsWith('post_meal_check')) {
                 await requestIntentClarification(message, deps);
             }
             return;
@@ -679,7 +683,7 @@ module.exports = async function handleMessage(message, deps) {
                 return;
             }
             // Guard: only clarify if no pending flow matched
-            if (!p?.type?.startsWith('post_meal_check')) {
+            if (!pendingContext?.type?.startsWith('post_meal_check')) {
                 await requestIntentClarification(message, deps);
             }
             return;
